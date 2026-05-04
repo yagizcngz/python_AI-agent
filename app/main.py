@@ -16,7 +16,6 @@ def main():
 
     if not API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
-    
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
@@ -25,53 +24,50 @@ def main():
         messages=[{"role": "user", "content": args.p}],
         tools=[
             {
-  "type": "function",
-  "function": {
-    "name": "Read",
-    "description": "Read and return the contents of a file",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "file_path": {
-          "type": "string",
-          "description": "The path to the file to read"
-        }
-      },
-      "required": ["file_path"]
-    }
-  }
-}
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "description": "Read and return the contents of a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "The path to the file to read"
+                            }
+                        },
+                        "required": ["file_path"]
+                    }
+                }
+            }
         ],
     )
 
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!", file=sys.stderr)
 
     message = chat.choices[0].message
-    if message.tool_calls and len(message.tool_calls) > 0:
+
+    if message.tool_calls:
         tool_call = message.tool_calls[0]
         
-        if tool_call.function and tool_call.function.arguments:
+        if tool_call.function.name == "Read":
             arguments = json.loads(tool_call.function.arguments)
+            file_path = arguments["file_path"]
             
-            file_path = arguments.get("file_path")
-            if file_path:
-                try:
-                    with open(file_path, "r") as f:
-                        content = f.read()
-                    print(content, end="", file=sys.stderr)
-                except Exception as e:
-                    print(f"Error reading file: {e}", file=sys.stderr)
-            else:
-                print("file_path argument is missing", file=sys.stderr)
-        else:
-            print("No function call or arguments found in tool call", file=sys.stderr)
+            with open(file_path, "r") as f:
+                content = f.read()
+                # print yerine doğrudan stdout.write ve flush kullanıyoruz
+                # Bu sayede test sisteminin metni kesinlikle görmesini garantiliyoruz
+                sys.stdout.write(content)
+                sys.stdout.flush()
+                
     else:
-        print(message.content)
-
+        if message.content:
+            sys.stdout.write(message.content)
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
