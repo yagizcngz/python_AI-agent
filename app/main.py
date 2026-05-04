@@ -19,55 +19,78 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    chat = client.chat.completions.create(
-        model="anthropic/claude-haiku-4.5",
-        messages=[{"role": "user", "content": args.p}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "Read",
-                    "description": "Read and return the contents of a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "The path to the file to read"
-                            }
-                        },
-                        "required": ["file_path"]
-                    }
+    # 1. Konuşma geçmişini (messages) döngünün DIŞINDA tanımlıyoruz.
+    messages = [{"role": "user", "content": args.p}]
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "Read",
+                "description": "Read and return the contents of a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file to read"
+                        }
+                    },
+                    "required": ["file_path"]
                 }
             }
-        ],
-    )
-
-    if not chat.choices or len(chat.choices) == 0:
-        raise RuntimeError("no choices in response")
+        }
+    ]
 
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    message = chat.choices[0].message
+    # 2. Ajan Döngüsü (Agent Loop) Başlıyor
+    while True:
+        chat = client.chat.completions.create(
+            model="anthropic/claude-haiku-4.5",
+            messages=messages, # Güncel konuşma geçmişini yolluyoruz
+            tools=tools,
+        )
 
-    if message.tool_calls:
-        tool_call = message.tool_calls[0]
-        
-        if tool_call.function.name == "Read":
-            arguments = json.loads(tool_call.function.arguments)
-            file_path = arguments["file_path"]
-            
-            with open(file_path, "r") as f:
-                content = f.read()
-                # print yerine doğrudan stdout.write ve flush kullanıyoruz
-                # Bu sayede test sisteminin metni kesinlikle görmesini garantiliyoruz
-                sys.stdout.write(content)
+        if not chat.choices or len(chat.choices) == 0:
+            raise RuntimeError("no choices in response")
+
+        message = chat.choices[0].message
+
+        # 3. Yapay zekanın verdiği cevabı konuşma geçmişine (messages) ekliyoruz
+        messages.append(message)
+
+        # 4. Eğer yapay zeka bir araç çağırdıysa:
+        if message.tool_calls:
+            # Birden fazla araç çağrısı olabileceği için döngüye alıyoruz
+            for tool_call in message.tool_calls:
+                if tool_call.function.name == "Read":
+                    arguments = json.loads(tool_call.function.arguments)
+                    file_path = arguments["file_path"]
+                    
+                    try:
+                        with open(file_path, "r") as f:
+                            content = f.read()
+                    except Exception as e:
+                        content = f"Error reading file: {e}"
+                        print(content, file=sys.stderr)
+                    
+                    # 5. DİKKAT: Artık dosyayı ekrana (stdout) YAZDIRMIYORUZ!
+                    # Bunun yerine dosyanın içeriğini yapay zekaya "tool" rolüyle geri gönderiyoruz.
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": content
+                    })
+                    
+        # 6. Eğer araç çağırmadıysa (Yani sonuca ulaştıysa):
+        else:
+            if message.content:
+                sys.stdout.write(message.content)
                 sys.stdout.flush()
-                
-    else:
-        if message.content:
-            sys.stdout.write(message.content)
-            sys.stdout.flush()
+            
+            # Sonucu yazdırdıktan sonra döngüyü kırıp programı bitiriyoruz.
+            break
 
 
 if __name__ == "__main__":
