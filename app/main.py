@@ -19,7 +19,7 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    # 1. Konuşma geçmişini (messages) döngünün DIŞINDA tanımlıyoruz.
+    # Konuşma geçmişi
     messages = [{"role": "user", "content": args.p}]
     
     tools = [
@@ -39,16 +39,36 @@ def main():
                     "required": ["file_path"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Write",
+                "description": "Write content to a file",
+                "parameters": {
+                    "type": "object",
+                    "required": ["file_path", "content"],
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path of the file to write to"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file"
+                        }
+                    }
+                }
+            }
         }
     ]
 
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    # 2. Ajan Döngüsü (Agent Loop) Başlıyor
     while True:
         chat = client.chat.completions.create(
             model="anthropic/claude-haiku-4.5",
-            messages=messages, # Güncel konuşma geçmişini yolluyoruz
+            messages=messages, 
             tools=tools,
         )
 
@@ -57,13 +77,30 @@ def main():
 
         message = chat.choices[0].message
 
-        # 3. Yapay zekanın verdiği cevabı konuşma geçmişine (messages) ekliyoruz
-        messages.append(message)
-
-        # 4. Eğer yapay zeka bir araç çağırdıysa:
+        # --- İŞTE O GERİ GELEN KRİTİK DÜZELTME ---
+        # API'nin kafası karışmasın ve elindeki araçları unutmasın diye
+        # ham mesajı tertemiz bir sözlüğe (dict) çevirip geçmişe ekliyoruz.
+        assistant_msg = {"role": "assistant"}
+        if message.content:
+            assistant_msg["content"] = message.content
         if message.tool_calls:
-            # Birden fazla araç çağrısı olabileceği için döngüye alıyoruz
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                } for tc in message.tool_calls
+            ]
+            
+        messages.append(assistant_msg)
+        # ----------------------------------------
+
+        if message.tool_calls:
             for tool_call in message.tool_calls:
+                
                 if tool_call.function.name == "Read":
                     arguments = json.loads(tool_call.function.arguments)
                     file_path = arguments["file_path"]
@@ -75,21 +112,41 @@ def main():
                         content = f"Error reading file: {e}"
                         print(content, file=sys.stderr)
                     
-                    # 5. DİKKAT: Artık dosyayı ekrana (stdout) YAZDIRMIYORUZ!
-                    # Bunun yerine dosyanın içeriğini yapay zekaya "tool" rolüyle geri gönderiyoruz.
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": content
+                    })
+                
+                elif tool_call.function.name == "Write":
+                    arguments = json.loads(tool_call.function.arguments)
+                    file_path = arguments["file_path"]
+                    file_content = arguments["content"]
+                    
+                    try:
+                        directory = os.path.dirname(file_path)
+                        if directory:
+                            os.makedirs(directory, exist_ok=True)
+                            
+                        with open(file_path, "w") as f:
+                            f.write(file_content)
+                        
+                        content = "File written successfully."
+                    except Exception as e:
+                        content = f"Error writing file: {e}"
+                        print(content, file=sys.stderr)
+                        
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": content
                     })
                     
-        # 6. Eğer araç çağırmadıysa (Yani sonuca ulaştıysa):
         else:
             if message.content:
                 sys.stdout.write(message.content)
                 sys.stdout.flush()
             
-            # Sonucu yazdırdıktan sonra döngüyü kırıp programı bitiriyoruz.
             break
 
 
