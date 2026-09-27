@@ -1,84 +1,7 @@
 """
-=============================================================================
-OTONOM YAPAY ZEKA AJANI (AI Agent) 
-=============================================================================
-Bu program, OpenRouter API üzerinden çeşitli dil modellerini kullanarak çalışan 
-ve bilgisayarda otonom olarak dosya okuma (Read), dosya yazma (Write) ve 
-terminal komutlari (Bash) çaliştirabilen bir asistandir.
-
-KULLANIM İÇİN GEREKEN ADIMLAR:
-
-1. PYTHON KURULUMU:
-   Bilgisayarinizda Python'in (tercihen 3.x ve üzeri) yüklü olduğundan ve 
-   sistem yoluna (PATH) eklendiğinden emin olun.
-
-2. GEREKLİ KÜTÜPHANELER VE KURULUM:
-   Bu projede hem Python'in yerleşik kütüphaneleri hem de dişaridan 
-   yüklenmesi gereken özel kütüphaneler kullanilmiştir.
-
-   A. Kurulum GEREKTİRMEYEN (Yerleşik) Kütüphaneler:
-      Aşağidaki kütüphaneler Python ile birlikte hazir gelir, bunlar 
-      için herhangi bir yükleme komutu çaliştirmaniza gerek YOKTUR:
-      - os         : Dosya ve klasör işlemleri 
-      - sys        : Sistem yollari ve dinamik Python çaliştirma işlemleri 
-      - json       : API'den gelen verileri ayriştirma işlemleri
-      - subprocess : Terminal (Bash) araçlarini ve komutlarini çaliştirma
-
-   B. Kurulum GEREKTİREN (Diş) Kütüphaneler:
-      Programin OpenRouter API sunucularina bağlanabilmesi için 
-      aşağidaki kütüphanenin bilgisayariniza indirilmesi GEREKLİDİR. 
-      Terminali (veya PowerShell'i) açip şu komutlari sirasiyla çaliştirin:
-
-         pip install openai
-
-3. API ANAHTARI AYARLAMA:
-   Bu kodun çalişmasi için bir OpenRouter API anahtarina ihtiyaciniz vardir.
-   - https://openrouter.ai/ adresine gidin ve ücretsiz bir hesap açin.
-   - Profilinizden yeni bir "API Key" oluşturun.
-   - Oluşturduğunuz bu API anahtarını güvenli bir yerde saklayın, çünkü bu anahtar 
-    sizin API erişiminizi sağlar ve başkalarıyla paylaşılmamalıdır.
-   - API anahtarınızı bilgisayarınızın ortam değişkenlerine (environment variables) ekleyin.
-    Eklemek için terminal veya PowerShell'e aşağıdaki komutu yazabilirsiniz.
-
-   - $env:OPENROUTER_API_KEY=" api_key_değeriniz " --> tırnak içine API-KEY girebilirsiniz. 
-   - Eğer Programı Command Promt üzerinden çalıştırıyorsanız, set OPENROUTER_API_KEY=api_key_değeriniz  komutunu kullanarak ortam değişkenini ekleyebilirsiniz.
-
-   - Bu komut, PowerShell kullanıyorsanız geçici olarak ortam değişkeni ekler. Kalıcı olarak eklemek için işletim sisteminizin ortam değişkenleri ayarlarına gidip OPENROUTER_API_KEY adında yeni bir değişken oluşturup değer olarak API anahtarınızı girebilirsiniz.
-
-4. ÇALIŞTIRMA:
-   Projenin ana dizininde bir terminal (veya PowerShell) açın.
-   Windows kullanıcıları için programı başlatma komutu:
-   
-   py app/main.py -p "Buraya asistanın yapmasını istediğiniz görevi yazın."
-   
-   (Not: Eğer macOS/Linux kullanıyorsanız veya 'py' komutu çalışmazsa, 
-   bunun yerine 'python app/main.py -p "merhaba"' veya 
-   'python3 app/main.py -p "merhaba"' komutlarını deneyebilirsiniz.)
-
-   --> API ANAHTARI ekledikten sonra çalıştırmayı deneyip [Errno 2] No such file or directory hatasını alırsanız,
-   terminale cd python_AI_agent (dosyanın adını istediğiniz gibi değiştirebilirsiniz ancak değiştirdikten sonra komutta da değiştirmeyi unutmayın) komutunu yazarak bu dosyanın bulunduğu dizine geçiş yapabilirsiniz. Ardından tekrar çalıştırmayı deneyin.
-   ya da py python_AI_agent/app/main.py -p "merhaba" gibi main.py dosyasının tam yolunu vererek de çalıştırabilirsiniz. 
-
-5. EK NOTLAR:
- Prompt içinde kullanması gereken aracı özellikle belirtmezseniz, model markdown karakterleri, açıklama cümleleri ekleyebilir veya doğru aracı seçmeyebilir ve bu da programın doğru çalışmamasına neden olabilir.
- Bu yüzden, modelin hangi aracı kullanması gerektiğini açıkça belirtmek önemlidir. Örneğin, "Write aracını kullanarak 'deneme.txt' dosyasına 'Hello World!' yaz" gibi net bir talimat vermek, modelin doğru aracı kullanmasını sağlar.
-
- Read aracı denemek için --> py app/main.py -p "app/main.py dosyasını oku ve bana bu kodun ne işe yaradığını tek cümleyle söyle."
-
- Write aracını denemek için --> py app/main.py -p "app klasöründe 'deneme.txt' oluşturup içine 'Hello World!' yazan bir kod yaz ve sonra bu dosyayı oku ve içeriğini bana söyle."
- Write aracını denemek için --> py app/main.py -p "Ekrana 'Test Basarili' yazdiran kisa bir Python kodu uret. Bu kodu KESINLIKLE Write aracini kullanarak 'temiz_kod.py' isimli bir dosyaya kaydet. Baska hiçbir islem yapma."
-
- Bash aracını denemek için --> py app/main.py -p "Şu an bulunduğum dizindeki dosyaları listele ve bana isimlerini söyle."
- Bash aracını denemek için --> py app/main.py -p "app klasöründe 'hesap.py' oluştur, içine 5 ile 10'u toplayıp EKRANA YAZDIRAN bir kod yaz ve sonra bu dosyayı çalıştırıp sonucu bana söyle."
-
- Read ve Write aracı için --> py app/main.py -p "app klasöründe "app klasöründe 'deneme.txt' adında bir dosya oluştur. Bunu yapmak için doğrudan sistem araçlarını (Write) kullan ve içine 'Hello World!' yaz. Ardından okuma aracını (Read) kullanarak bu dosyayı oku ve okuduğun bu içeriği bana söyle. Bana nasıl yapılacağını anlatan bir kod metni verme, bu işlemleri bizzat yap."
- Read ve Bash aracı için --> py app/main.py -p "Terminal aracını (Bash) kullanarak Windows'un sistem bilgilerini almak için systeminfo > sistem_bilgisi.txt komutunu çalıştır (bu işlem birkaç saniye sürebilir). İşlem bittikten sonra okuma aracını (Read) kullanarak oluşan bu 'sistem_bilgisi.txt' dosyasını oku ve bana işletim sistemimin tam adını ve sürümünü söyle."
-
- Write ve Bash aracı için --> py app/main.py -p "1'den 50'ye kadar olan çift sayıları toplayıp sonucu ekrana yazdıran bir Python kodu üret. 1. ADIM: Bu kodu 'hesap_testi.py' adında bir dosyaya kaydet. 2. ADIM: Dosya kaydedildikten sonra terminalde bu dosyayı çalıştır ve ekrana çıkan nihai sonucu bana söyle."
-
- Read, Write ve Bash aracı için --> py app/main.py -p "Lütfen Yazma (Write) aracını kullanarak zincir_testi.py adında bir Python dosyası oluştur. Bu kod, 1'den 1000'e kadar olan sayıların toplamını hesaplasın ve bu sonucu gizli_sonuc.txt adında yeni bir dosyaya kaydetsin. Ardından Terminal (Bash) aracını kullanarak yazdığın bu Python dosyasını çalıştır. Son olarak Okuma (Read) aracını kullanarak, kodun ürettiği o gizli_sonuc.txt dosyasını oku ve içerideki nihai sayıyı bana söyle. Bana nasıl yapılacağını anlatma veya örnek kod verme, tüm bu araçları bizzat arka arkaya kullanarak görevi tamamla."
-
-=============================================================================
+Autonomous AI Agent CLI powered by OpenRouter API.
+Executes autonomous reasoning loops (ReAct pattern) with sandboxed 
+file operations (Read, Write) and local shell execution (Bash).
 """
 
 import argparse
@@ -89,38 +12,113 @@ import subprocess
 
 from openai import OpenAI
 
-# Dizin Sabitleme (Absolute Path)
-# os.path.abspath(__file__) -> Bu main.py dosyasının bilgisayardaki KESİN yolunu bulur (Örn: C:\Users\Cengiz\python-chatbot\app\main.py)
-# os.path.dirname -> Bu yolun sadece klasör kısmını alır (Örn: C:\Users\Cengiz\python-chatbot\app)
-# Böylece terminalin nerede açıldığına bağımlı kalmadan, her zaman doğru 'app' klasörünü hedefleriz.
+# Anchor workspace directory to current file location for deterministic execution
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
 
+def get_api_key() -> str:
+    """Retrieve API key from environment variable or fallback text file."""
+    key = os.getenv("OPENROUTER_API_KEY")
+    if key and key.strip():
+        return key.strip()
+
+    # Search for fallback key file in project directories
+    search_paths = [
+        os.path.join(BASE_DIR, "..", "API_KEYS_OPEN_ROUTER.txt"),
+        os.path.join(BASE_DIR, "API_KEYS_OPEN_ROUTER.txt"),
+    ]
+    for path in search_paths:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        return line
+    return ""
+
+
+RECOMMENDED_FREE_MODELS = [
+    "nvidia/nemotron-3.5-lightning:free",
+    "poolside/laguna-xs-2.1:free",
+    "liquid/lfm-2.5-2.6b:free",
+    "google/gemma-4-26b-a4b-it:free",
+]
+
+
+def list_free_models(client: OpenAI):
+    """Fetch and print all available free models directly from OpenRouter."""
+    print("Fetching active free models from OpenRouter...", file=sys.stderr)
+    try:
+        models = client.models.list()
+        free_models = [m.id for m in models.data if ":free" in m.id]
+    except Exception as e:
+        print(f"Notice: Failed to fetch live models from OpenRouter ({e}). Showing defaults.", file=sys.stderr)
+        free_models = RECOMMENDED_FREE_MODELS
+
+    print(f"\n[+] Active Free Models on OpenRouter ({len(free_models)} found):\n")
+    for idx, model_id in enumerate(free_models, start=1):
+        print(f"   {idx:2d}. {model_id}")
+    print("\nHow to run with any model:")
+    print(f'   py app/main.py -m "{free_models[0]}" -p "your task prompt"\n')
+    print("Or set default in PowerShell:")
+    print(f'   $env:OPENROUTER_MODEL = "{free_models[0]}"\n')
+
+
+def print_model_suggestions(current_model: str):
+    """Print curated alternative free models and copy-paste commands to help user switch."""
+    alternatives = [m for m in RECOMMENDED_FREE_MODELS if m != current_model]
+    print("\n[!] Suggested alternative free models to try:", file=sys.stderr)
+    for alt in alternatives:
+        print(f"   * {alt}", file=sys.stderr)
+    print("\nTo view all active free models, run:", file=sys.stderr)
+    print("   py app/main.py --list-models", file=sys.stderr)
+    print("\nHow to switch models:", file=sys.stderr)
+    print(f'   1. CLI flag:   py app/main.py -m "{alternatives[0]}" -p "..."', file=sys.stderr)
+    print(f'   2. PowerShell: $env:OPENROUTER_MODEL = "{alternatives[0]}"\n', file=sys.stderr)
+
+
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("-p", required=True)
+    default_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+
+    p = argparse.ArgumentParser(description="Autonomous AI Agent CLI")
+    p.add_argument("-p", required=False, help="User prompt / task for the agent")
+    p.add_argument(
+        "-m", "--model",
+        default=default_model,
+        help=f"OpenRouter model identifier (default: {default_model}, can also be set via $env:OPENROUTER_MODEL)"
+    )
+    p.add_argument(
+        "-l", "--list-models",
+        action="store_true",
+        help="List all active free models on OpenRouter and exit"
+    )
     args = p.parse_args()
 
-    if not API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY is not set")
+    api_key = get_api_key()
+    if not api_key:
+        print("Error: OPENROUTER_API_KEY is not set and no key found in API_KEYS_OPEN_ROUTER.txt.", file=sys.stderr)
+        print("Set it in PowerShell via: $env:OPENROUTER_API_KEY=\"your_key_here\"", file=sys.stderr)
+        sys.exit(1)
 
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    client = OpenAI(api_key=api_key, base_url=BASE_URL)
 
-    # Konuşma geçmişi - Sisteme Windows'ta olduğunu açıkça söylüyoruz
+    if args.list_models:
+        list_free_models(client)
+        sys.exit(0)
+
+    if not args.p:
+        p.error("the following arguments are required: -p")
+
+    # Initialize conversation history with OS-aware instructions
     messages = [
-        # eğer linux kullanıyorsanız, bu satırı şu şekilde değiştirebilirsiniz:
-        # "You are a helpful assistant. The user is on a Linux machine. Always use Linux-compatible shell commands (e.g., use 'ls' instead of 'dir', and use 'mkdir -p' for creating directories)."
-        #  macOS için :
-        #  "You are a helpful assistant. The user is on a macOS machine. Always use macOS-compatible shell commands (e.g., use 'ls' instead of 'dir', and use 'mkdir -p' for creating directories)."
         {"role": "system", "content": "You are a helpful assistant. The user is on a Windows machine. Always use Windows-compatible shell commands (e.g., use 'dir' instead of 'ls', and avoid 'mkdir -p' - just use 'mkdir')."},
         {"role": "user", "content": args.p}
     ]
     
     tools = [
-        # --- READ ARACI ---
+        # --- Read Tool ---
         {
             "type": "function",
             "function": {
@@ -138,7 +136,7 @@ def main():
                 }
             }
         },
-        # --- WRITE ARACI ---
+        # --- Write Tool ---
         {
             "type": "function",
             "function": {
@@ -160,7 +158,7 @@ def main():
                 }
             }
         },
-        # --- BASH ARACI ---
+        # --- Bash Tool ---
         {
             "type": "function",
             "function": {
@@ -182,36 +180,27 @@ def main():
 
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    # Eğer dosya herhangi bir nedenden çalışmaz ve sadece Logs from your program will appear here! yazarsa API'den gelen mesajı ekranda görmek için
-    # 1'den 5'e kadar olan ADIMlardaki print() fonksiyonlarının yorum satırlarını kaldırarak API'den gelen ham veriyi görebilirsiniz.
-    # Bu, modelin neden beklenmedik şekilde davrandığını anlamanıza yardımcı olabilir.
-
     while True:
-        # 1- print(">>> 1. ADIM: API'ye istek gonderiliyor (Lutfen bekleyin)...", file=sys.stderr)
-        
         try:
             chat = client.chat.completions.create(
-                model="poolside/laguna-xs.2:free", # (google/gemma-4-26b-a4b-it:free) modeli istediğiniz gibi değiştirebilirsiniz. Ancak, araç kullanımını destekleyen bir model seçtiğinizden emin olun.
+                model=args.model,
                 messages=messages,
                 tools=tools,
             )
-            # 2-print(">>> 2. ADIM: API'den cevap basariyla alindi!", file=sys.stderr)
         except Exception as e:
-            print(f"!!! KRITIK HATA: API baglantisi coktu: {e}", file=sys.stderr)
+            print(f"Critical error connecting to OpenRouter API with model '{args.model}': {e}", file=sys.stderr)
+            print_model_suggestions(args.model)
             break
 
-
-        # 1. GÜVENLİK AĞI: API tamamen çökerse veya boş dönerse
+        # Fallback guard: Validate non-empty response
         if not chat.choices or len(chat.choices) == 0:
-            print("!!! HATA: OpenRouter bombos yanit gonderdi. (Sunucu yoğun veya limit asildi)", file=sys.stderr)
+            print(f"Error: Empty response received from model '{args.model}' (rate limit or server load).", file=sys.stderr)
+            print_model_suggestions(args.model)
             break
 
         message = chat.choices[0].message
-        
-        # repr() kullanarak gizli bosluk veya kacis karakterlerini (\n) aciga cikariyoruz
-        # 3- print(f">>> 3. ADIM: Modelin verisi -> ICERIK: {repr(message.content)} | ARAC_KULLANIMI: {bool(message.tool_calls)}", file=sys.stderr)
 
-        # API dictionary dönüşümü (Geçmişi unutmaması için)
+        # Append assistant message to context memory
         assistant_msg = {"role": "assistant"}
         if message.content:
             assistant_msg["content"] = message.content
@@ -229,23 +218,21 @@ def main():
             
         messages.append(assistant_msg)
 
+        # Handle tool execution loop
         if message.tool_calls:
-            # 4- print(">>> 4. ADIM: Model bir aractan yardim istiyor, isleniyor...", file=sys.stderr)
             for tool_call in message.tool_calls:
                 
-                # --- READ İŞLEMİ ---
+                # --- READ EXECUTION ---
                 if tool_call.function.name == "Read":
                     arguments = json.loads(tool_call.function.arguments)
                     file_path = arguments["file_path"]
                     
-                    # Dosya Okuma Güvenliği
-                    # os.path.basename() -> Gelen yoldan sadece dosya adını ("deneme.txt") ayıklar.
-                    # os.path.join() -> Bu dosya adını bizim kesin yolumuzla (BASE_DIR) birleştirip içeriye hapseder.
+                    # Sandbox Security: Enforce BASE_DIR scoping to prevent path traversal
                     safe_filename = os.path.basename(file_path)
                     absolute_file_path = os.path.join(BASE_DIR, safe_filename)
 
                     try:
-                        with open(absolute_file_path, "r", encoding="utf-8",errors="ignore") as f:
+                        with open(absolute_file_path, "r", encoding="utf-8", errors="ignore") as f:
                             content = f.read()
                     except Exception as e:
                         content = f"Error reading file: {e}"
@@ -257,23 +244,19 @@ def main():
                         "content": content
                     })
                 
-                # --- WRITE İŞLEMİ ---
+                # --- WRITE EXECUTION ---
                 elif tool_call.function.name == "Write":
                     arguments = json.loads(tool_call.function.arguments)
-                    # Esnek anahtar kontrolü (KeyError önleyici)
                     file_path = arguments.get("file_path") or arguments.get("filename")
                     file_content = arguments.get("content") or arguments.get("file_content")
 
-                    # Dosya Yazma Güvenliği
-                    # Tıpkı Read işlemindeki gibi, dosyanın başka bir klasöre (ana dizine) yazılmasını engelliyoruz.
-                    # Sadece dosyanın ismini alıyor ve zorla kendi klasörümüzün içine (BASE_DIR) kaydediyoruz.
+                    # Sandbox Security: Confine writes strictly to BASE_DIR
                     safe_filename = os.path.basename(file_path)
                     absolute_file_path = os.path.join(BASE_DIR, safe_filename)
 
                     try:
-                        # Dosyanın kaydedileceği dizin yoksa (ki artık hep BASE_DIR olacak) güvenli bir şekilde oluşturur.
                         os.makedirs(os.path.dirname(absolute_file_path), exist_ok=True)
-                        with open(absolute_file_path, "w", encoding="utf-8",errors="replace") as f:
+                        with open(absolute_file_path, "w", encoding="utf-8", errors="replace") as f:
                             f.write(file_content)
                         result = f"File {file_path} written successfully."
                     except Exception as e:
@@ -286,7 +269,7 @@ def main():
                         "content": result
                     })
 
-                # --- BASH İŞLEMİ ---
+                # --- BASH EXECUTION ---
                 elif tool_call.function.name == "Bash":
                     arguments = json.loads(tool_call.function.arguments)
                     command = arguments.get("command") or arguments.get("cmd")
@@ -295,22 +278,21 @@ def main():
                         command = list(arguments.values())[0]
                     
                     if command:
-                        # Sistemde ne yüklü olursa olsun, şu an çalışan Python'un tam yolunu kullanır
+                        # Use active Python runtime executable across cross-platform environments
                         python_exe = sys.executable
-                        # Hem 'python' hem de 'python3' kelimelerini doğru yolla değiştiriyoruz
                         command = command.replace("python3 ", f'"{python_exe}" ').replace("python ", f'"{python_exe}" ')
                         
                         try:
-                            # Hangi komutun gittiğini görmen için stderr'e yazdırıyoruz. Eğer program Bash işlemi yaptıktan sonra terminalde DEBUG ve Terminal çıktısı görmek istiyorsanız print(f...) satırlarındaki yorum satırlarını kaldırabilirsiniz.
-                            # print(f"DEBUG - Çaliştirilan: {command}", file=sys.stderr)
-
-                            # Terminal Çalışma Dizini (CWD) Sabitleme
-                            # cwd=BASE_DIR parametresi, çalıştırılan terminal komutunun doğrudan 'app' klasörü 
-                            # içerisinde çalışmasını garanti eder. Bu sayede model kendi yazdığı python dosyasını 
-                            # çalıştırırken "dosya bulunamadı" hatası almaz.
-                            process = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=BASE_DIR,errors="replace")
+                            # Confine command execution working directory strictly to BASE_DIR
+                            process = subprocess.run(
+                                command, 
+                                shell=True, 
+                                capture_output=True, 
+                                text=True, 
+                                cwd=BASE_DIR, 
+                                errors="replace"
+                            )
                             result = f"STDOUT: {process.stdout}\nSTDERR: {process.stderr}"
-                            # print(f"--- Terminal Çiktisi ---\n{result}\n-----------------------", file=sys.stderr)
                         except Exception as e:
                             result = f"Error: {e}"
                             print(result, file=sys.stderr)
@@ -324,14 +306,13 @@ def main():
                     })
 
         else:
-            # 5- print(">>> 5. ADIM: Model arac kullanmadi, nihai cevap yazdirilip donguden cikiliyor.", file=sys.stderr)
+            # Model synthesized final response without invoking further tools
             if message.content:
                 print(message.content)
             else:
-                # 2. GÜVENLİK AĞI: Model araç kullanmaz ve cevap da vermezse
-                # Modelin boş dönme ihtimalini terminalde yakalıyoruz
-                print(">>> 5. ADIM HATA: Model hiçbir araç kullanmadi ve metin üretmedi. Sadece donup kaldi.", file=sys.stderr)
+                print("Notice: Model completed without returning output or calling tools.", file=sys.stderr)
             break
+
 
 if __name__ == "__main__":
     main()

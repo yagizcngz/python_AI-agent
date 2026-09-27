@@ -19,6 +19,8 @@ An autonomous, command-line AI agent built in Python leveraging LLM function cal
 * **🔒 Sandbox & Path Traversal Protection:** All file reading, writing, and terminal operations are strictly contained within `BASE_DIR` using basename sanitization (`os.path.basename`) to prevent unauthorized file system escape.
 * **⚡ Cross-Platform Compatibility:** Dynamic executable detection (`sys.executable`) maps commands correctly across Windows, macOS, and Linux.
 * **🛡️ Fault-Tolerant Output Handling:** Subprocess streams employ replacement decoding (`errors="replace"`) to prevent crashes from non-UTF8/localized terminal characters.
+* **🎯 Dynamic Model Selection & Live Discovery:** Switch between any OpenRouter model via CLI (`-m`) or PowerShell environment variable (`$env:OPENROUTER_MODEL`), or discover all live zero-cost models using `--list-models`.
+* **🔄 Upstream Recovery & Smart Suggestions:** If an endpoint experiences heavy load or rate limits, the CLI suggests active alternatives with ready-to-run copy-paste commands.
 
 ---
 
@@ -96,11 +98,48 @@ User Prompt (-p "...")
    export OPENROUTER_API_KEY="your_openrouter_api_key_here"
    ```
 
+   > **💡 Tip:** Alternatively, you can save your key inside `API_KEYS_OPEN_ROUTER.txt` in the project root for automatic detection.
+
 ---
 
-## 💻 Usage & Examples
+## 💻 Usage & CLI Reference
 
-Run the agent from the project root by supplying a goal or task using the `-p` flag:
+### Command-Line Flags
+
+| Flag | Long Flag | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `-p` | | Goal or task prompt for the agent to execute | *(Required unless `-l` is passed)* |
+| `-m` | `--model` | Target OpenRouter model identifier | `nvidia/nemotron-3.5-lightning:free` |
+| `-l` | `--list-models` | List all live, active free models on OpenRouter and exit | `False` |
+| `-h` | `--help` | Show CLI arguments and exit | |
+
+---
+
+### Model Management & Discovery
+
+#### Discover All Live Free Models:
+Inspect real-time free endpoints on OpenRouter:
+```powershell
+python app/main.py --list-models
+# or shorthand:
+python app/main.py -l
+```
+
+#### Run with a Specific Model:
+Pass the `-m` flag to override the default model on any run:
+```powershell
+python app/main.py -m "poolside/laguna-xs-2.1:free" -p "Introduce yourself."
+```
+
+#### Set a Default Model for PowerShell Session:
+```powershell
+$env:OPENROUTER_MODEL = "liquid/lfm-2.5-2.6b:free"
+python app/main.py -p "Introduce yourself."
+```
+
+---
+
+### Autonomous Execution Examples
 
 ### 1. File Inspection (Read Tool)
 ```bash
