@@ -177,4 +177,5 @@ API_KEYS_*.txt
 *.key
 .env
 .env.*
+!.env.example
 API_KEYS_OPEN_ROUTER.txt

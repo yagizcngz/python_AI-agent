@@ -1,72 +1,83 @@
-# 🤖 Autonomous Python AI Agent
+# Autonomous Python AI Agent
 
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![OpenRouter](https://img.shields.io/badge/LLM-OpenRouter_API-6366F1?logoColor=white)](https://openrouter.ai/)
-[![Tools: Function Calling](https://img.shields.io/badge/Tools-Function_Calling-10B981?logoColor=white)](#-built-in-tools)
+[![Local: Ollama](https://img.shields.io/badge/Local_LLM-Ollama_Ready-000000?logo=ollama&logoColor=white)](https://ollama.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-An autonomous, command-line AI agent built in Python leveraging LLM function calling via the **OpenRouter API**. The agent implements an iterative reasoning loop (**ReAct pattern**) capable of multi-step problem solving, sandboxed file operations (`Read`, `Write`), and local terminal execution (`Bash`) without requiring human intervention between intermediate steps.
+An autonomous, multi-modal interface AI agent built in Python leveraging native LLM function calling via **OpenRouter** and **local offline runtimes (Ollama, LM Studio)**. The agent implements an iterative reasoning loop (**ReAct pattern**) capable of multi-step problem solving, sandboxed file operations (`Read`, `Write`, `Edit`, `ListDir`), and local terminal execution (`Bash`) across CLI, interactive REPL, and visual Textual Terminal UI.
 
 ---
 
-## 🌟 Key Features
+## Key Features
 
-* **🔄 Autonomous Reasoning Loop:** Runs an iterative decision-making loop (`while True`), maintaining conversation memory and dynamically deciding whether to invoke tools or return a final synthesized response.
-* **🛠️ Native Tool Execution (Function Calling):**
+* **Autonomous Reasoning Loop:** Runs an iterative ReAct decision loop with configurable step limits (`--max-steps`), preventing infinite loops and runaway token consumption.
+* **Interactive Terminal UI (TUI):** A visual, keyboard-driven dashboard launched by default with live chat streams, syntax-highlighted tool cards, collapsible file tree explorer, model information, and token telemetry.
+* **Conversational REPL Mode:** Run with `--repl` to engage in multi-turn back-and-forth tasks in the terminal with persistent conversation context and helper commands (`/reset`, `/usage`, `/exit`).
+* **Native Tool Execution (Function Calling):**
   * `Read`: Safely reads files within the isolated application workspace.
   * `Write`: Creates and updates files with automatic directory provisioning.
-  * `Bash`: Executes terminal commands within the workspace using the active Python runtime.
-* **🔒 Sandbox & Path Traversal Protection:** All file reading, writing, and terminal operations are strictly contained within `BASE_DIR` using basename sanitization (`os.path.basename`) to prevent unauthorized file system escape.
-* **⚡ Cross-Platform Compatibility:** Dynamic executable detection (`sys.executable`) maps commands correctly across Windows, macOS, and Linux.
-* **🛡️ Fault-Tolerant Output Handling:** Subprocess streams employ replacement decoding (`errors="replace"`) to prevent crashes from non-UTF8/localized terminal characters.
-* **🎯 Dynamic Model Selection & Live Discovery:** Switch between any OpenRouter model via CLI (`-m`) or PowerShell environment variable (`$env:OPENROUTER_MODEL`), or discover all live zero-cost models using `--list-models`.
-* **🔄 Upstream Recovery & Smart Suggestions:** If an endpoint experiences heavy load or rate limits, the CLI suggests active alternatives with ready-to-run copy-paste commands.
+  * `Edit`: Fast in-place search-and-replace text editing without rewriting entire files.
+  * `ListDir`: Native tree/directory inspection without spawning shell sub-processes.
+  * `Bash`: Sandboxed terminal commands with strict timeout guards (`--timeout`) and dynamic Python runtime detection.
+* **Strict Sandbox & Traversal Protection:** All file operations are validated against the workspace root using `pathlib.Path.resolve().is_relative_to(sandbox_root)`, strictly forbidding directory traversal escapes (`../`).
+* **Cloud + Local LLM Support:** Toggle between cloud models via OpenRouter or local zero-cost models on Ollama/LM Studio using `--local` or `--base-url`.
+* **Fault-Tolerant & Safe:**
+  * Timeout protection on API calls (`--api-timeout`) and subprocess executions.
+  * Gracefully catches and repairs malformed JSON from small models.
+  * Automatic UTF-8 stream reconfiguring to prevent Windows locale encoding errors.
+  * Live model discovery (`--list-models`) and smart fallback suggestions when endpoints hit rate limits.
 
 ---
 
-## 🏗️ Architecture & Execution Flow
+## Architecture & Execution Flow
 
 ```
-User Prompt (-p "...")
-        │
-        ▼
-┌──────────────────┐
-│   Agent Brain    │ ◄─── OpenRouter LLM (Tool Planning & Reasoning)
-└─────────┬────────┘
-          │
-    Tool Call Requested?
-    ├── YES ──► ┌───────────────────────────────────────────────┐
-    │           │           Sandboxed Execution                 │
-    │           │  • Read: Inspect local files safely           │
-    │           │  • Write: Create scripts / documents          │
-    │           │  • Bash: Execute terminal commands via Python │
-    │           └───────────────────────┬───────────────────────┘
-    │                                   │
-    │           Tool Output / Observation Appended to Context
-    │                                   │
-    │                                   ▼
-    │           (Loop back to Agent Brain for next step)
-    │
-    └── NO  ──► Print Final Answer & Terminate Execution
+                      User Prompt / Interaction
+               (Default: TUI | REPL: --repl | CLI: -p)
+                                  │
+                                  ▼
+                      ┌───────────────────────┐
+                      │      Agent Brain      │ <─── OpenRouter or Local Ollama
+                      └───────────┬───────────┘
+                                  │
+                          Tool Call Requested?
+                          ├── YES ──> ┌────────────────────────────────────────┐
+                          │           │        Sandboxed Tool Execution        │
+                          │           │  • Read: Inspect local files           │
+                          │           │  • Write: Create files & directories   │
+                          │           │  • Edit: In-place text modifications   │
+                          │           │  • ListDir: Inspect workspace tree     │
+                          │           │  • Bash: Shell execution with timeout  │
+                          │           └───────────────────┬────────────────────┘
+                          │                               │
+                          │        Tool Observation Fed Back to Context
+                          │                               │
+                          │                               ▼
+                          │                 (Loop back to Agent Brain)
+                          │
+                          └── NO  ──> Render Final Response & Telemetry Table
 ```
 
 ---
 
-## 🛠️ Built-in Tools
+## Built-in Tools
 
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
-| `Read` | `file_path` (string) | Reads the contents of a target file inside the sandbox. |
-| `Write` | `file_path` (string), `content` (string) | Writes content to a file, creating any required intermediate directories. |
-| `Bash` | `command` (string) | Executes shell commands in the workspace using the local Python environment. |
+| `Read` | `file_path` (string) | Reads file contents within the workspace sandbox. |
+| `Write` | `file_path` (string), `content` (string) | Creates/overwrites files, provisioning any required parent directories. |
+| `Edit` | `file_path` (string), `old_content` (string), `new_content` (string) | Performs surgical in-place text replacement in an existing file. |
+| `ListDir` | `directory_path` (string, optional), `recursive` (bool, optional) | Inspects files and directories inside the sandbox without shell overhead. |
+| `Bash` | `command` (string) | Runs shell commands anchored to the workspace with timeout protection. |
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 * Python 3.9 or higher
-* An active [OpenRouter](https://openrouter.ai/) account and API Key
+* An [OpenRouter](https://openrouter.ai/) account and API Key **OR** a local [Ollama](https://ollama.com/) instance.
 
 ### Installation
 
@@ -76,109 +87,127 @@ User Prompt (-p "...")
    cd python_AI-agent
    ```
 
-2. **Install required dependencies:**
+2. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure your API Key:**
-
-   **PowerShell (Windows):**
-   ```powershell
-   $env:OPENROUTER_API_KEY="your_openrouter_api_key_here"
-   ```
-
-   **Command Prompt (Windows):**
-   ```cmd
-   set OPENROUTER_API_KEY=your_openrouter_api_key_here
-   ```
-
-   **Bash / Zsh (Linux & macOS):**
+3. **Configure your environment:**
+   Copy `.env.example` to `.env`:
    ```bash
-   export OPENROUTER_API_KEY="your_openrouter_api_key_here"
+   cp .env.example .env
    ```
-
-   > **💡 Tip:** Alternatively, you can save your key inside `API_KEYS_OPEN_ROUTER.txt` in the project root for automatic detection.
+   Edit `.env` and insert your key:
+   ```env
+   OPENROUTER_API_KEY=sk-or-v1-your_key_here
+   ```
 
 ---
 
-## 💻 Usage & CLI Reference
+## Usage Modes
 
-### Command-Line Flags
+### 1. Visual Terminal UI (TUI) Dashboard (Default)
+Simply run the application without arguments, or run `run.bat`:
+```powershell
+python app/main.py
+# or double-click run.bat
+```
+* **UI Controls & Buttons:**
+  * **Files (F2):** Display full workspace file tree.
+  * **Tools (F3):** Display full tool activity and shell logs.
+  * **Split (F4):** Display both tool activity and workspace files side-by-side/stacked.
+  * **Refresh (F5):** Refresh workspace file tree.
+  * **Send Button:** Submit current prompt.
+  * **Reset Button (Ctrl+R):** Clear conversation context.
+  * **Quit Button (Esc):** Exit the application.
+
+---
+
+### 2. Interactive Console REPL
+Launch the multi-turn conversational REPL by passing `--repl`:
+```powershell
+python app/main.py --repl
+```
+```text
+Python AI Agent -- Interactive REPL
+Type your prompt and press Enter. Commands: /reset, /usage, /exit
+
+User > Create a python file called calculate.py that calculates factorials.
+...
+User > Now run calculate.py using Bash and verify it works.
+```
+
+---
+
+### 3. Single-Shot Command Line (CLI)
+Pass a direct task with `-p`:
+```powershell
+python app/main.py -p "Inspect the workspace files and write a summary in summary.txt"
+```
+
+---
+
+### 4. Running Local Offline Models (Ollama)
+Run models locally with zero API keys and zero cost:
+```powershell
+# 1. In another terminal, pull and start your local model in Ollama:
+ollama run qwen2.5-coder:1.5b
+
+# 2. Run the agent with the --local flag:
+python app/main.py --local -m "qwen2.5-coder:1.5b" -p "Write a hello world script"
+```
+
+---
+
+## CLI Reference & Flags
 
 | Flag | Long Flag | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `-p` | | Goal or task prompt for the agent to execute | *(Required unless `-l` is passed)* |
-| `-m` | `--model` | Target OpenRouter model identifier | `nvidia/nemotron-3.5-lightning:free` |
-| `-l` | `--list-models` | List all live, active free models on OpenRouter and exit | `False` |
-| `-h` | `--help` | Show CLI arguments and exit | |
+| | | Launch the visual Textual Terminal UI dashboard | Default behavior |
+| `-p` | `--prompt` | Direct task prompt for single-shot execution | None |
+| | `--repl`, `--cli` | Launch interactive text console REPL | `False` |
+| `-m` | `--model` | OpenRouter or local model identifier | `inclusionai/ling-3.0-flash-sante:free` |
+| | `--local` | Connect to local Ollama server at `http://localhost:11434/v1` | `False` |
+| | `--base-url` | Custom OpenAI-compatible server base URL | OpenRouter API / Ollama |
+| `-l` | `--list-models` | List active models from the endpoint and exit | `False` |
+| `-w` | `--workspace` | Root directory for sandboxed file operations | Current directory |
+| | `--max-steps` | Maximum reasoning iterations before halting | `25` |
+| | `--timeout` | Shell command timeout in seconds | `30` |
+| | `--api-timeout`| Timeout for API LLM calls in seconds | `30.0` |
+| `-q` | `--quiet` | Output clean plaintext answer without Rich panels | `False` |
+| `-h` | `--help` | Show help and exit | |
 
 ---
 
-### Model Management & Discovery
+## Running Automated Tests
 
-#### Discover All Live Free Models:
-Inspect real-time free endpoints on OpenRouter:
+Run the full `pytest` test suite:
 ```powershell
-python app/main.py --list-models
-# or shorthand:
-python app/main.py -l
+pytest -v
 ```
-
-#### Run with a Specific Model:
-Pass the `-m` flag to override the default model on any run:
-```powershell
-python app/main.py -m "poolside/laguna-xs-2.1:free" -p "Introduce yourself."
-```
-
-#### Set a Default Model for PowerShell Session:
-```powershell
-$env:OPENROUTER_MODEL = "liquid/lfm-2.5-2.6b:free"
-python app/main.py -p "Introduce yourself."
-```
+Tests cover:
+* Path sandboxing & directory traversal prevention (`tests/test_sandbox.py`)
+* Tool operations (`Read`, `Write`, `Edit`, `ListDir`, `Bash`, timeouts) (`tests/test_tools.py`)
+* ReAct reasoning loop, step limits, and mocked API responses (`tests/test_agent.py`)
 
 ---
 
-### Autonomous Execution Examples
+## Security & Containment
 
-### 1. File Inspection (Read Tool)
-```bash
-python app/main.py -p "Read app/main.py and summarize what this application does in 2 sentences."
-```
-
-### 2. Code Generation & File Creation (Write Tool)
-```bash
-python app/main.py -p "Generate a Python script named fibonacci.py that prints the first 10 Fibonacci numbers. Save it using the Write tool."
-```
-
-### 3. Command Execution (Bash Tool)
-```bash
-python app/main.py -p "Check the files in the current directory and report their names."
-```
-
-### 4. Multi-Step Chained Task (Write ➔ Bash ➔ Read)
-```bash
-python app/main.py -p "Write a Python script called calculate_sum.py that calculates the sum of all numbers from 1 to 500 and writes the result to output.txt. Then run calculate_sum.py using Bash, read output.txt with Read, and tell me the final number."
-```
+* **Path Sandbox:** All operations are resolved against the workspace root and strictly checked using `Path.is_relative_to()`. Traversal attempts (`../` or external absolute paths) immediately raise a `PermissionError`.
+* **Execution Timeout:** All shell commands are enforced with a strict execution timeout (default: 30s) to prevent frozen processes from blocking the agent.
+* **Secrets Security:** Keys are loaded via `.env` files and environment variables, keeping plaintext credentials out of version control.
 
 ---
 
-## 🔒 Security & Containment
+## License
 
-This agent is designed for safe local experimentation:
-* **Directory Jail:** Target file paths are stripped using `os.path.basename` and resolved relative to `BASE_DIR`, preventing access to sensitive parent directories (`../`).
-* **Environment Isolation:** API keys and sensitive tokens are read strictly from environment variables rather than hardcoded in source files.
+This project is licensed under the MIT License -- see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 📄 License
+## Author
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-## 👨‍💻 Author
-
-**Yağız Cengiz**
+**Yagiz Cengiz**
 * GitHub: [@yagizcngz](https://github.com/yagizcngz)
 * Email: [yagizcengiz55@gmail.com](mailto:yagizcengiz55@gmail.com)
