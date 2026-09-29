@@ -1,6 +1,8 @@
 """
 Interactive Terminal User Interface (TUI) for Python AI Agent using Textual.
 Clean Chat stream on left; responsive Tool Activity & Workspace Files on right.
+Includes on-the-fly Model Switcher (Alt+M), File Previewer with X close button,
+Confirm Quit modal, full-screen Chat expand/restore toggling, and Command Palette (Alt+P).
 """
 
 from pathlib import Path
@@ -13,17 +15,24 @@ from rich.syntax import Syntax
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Footer,
     Header,
     Input,
     Label,
+    OptionList,
     RichLog,
     Tree,
 )
 
-from ..config import DEFAULT_MODEL, WORKSPACE_DIR
+from ..config import (
+    DEFAULT_LOCAL_BASE_URL,
+    DEFAULT_MODEL,
+    RECOMMENDED_FREE_MODELS,
+    WORKSPACE_DIR,
+)
 from ..core.agent import Agent, AgentEvent, AgentEventType
 from ..core.client import create_client, fetch_account_usage
 from ..core.memory import ConversationMemory
@@ -32,15 +41,360 @@ from ..tools.filesystem import EditTool, ListDirTool, ReadTool, WriteTool
 from ..tools.shell import BashTool
 
 
+def detect_language(path: Path) -> str:
+    """Detect syntax highlighting language based on file extension."""
+    ext_map = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".json": "json",
+        ".md": "markdown",
+        ".toml": "toml",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".html": "html",
+        ".css": "css",
+        ".sh": "bash",
+        ".bat": "batch",
+        ".ps1": "powershell",
+        ".txt": "text",
+        ".env": "text",
+        ".gitignore": "text",
+    }
+    return ext_map.get(path.suffix.lower(), "text")
+
+
+class ConfirmQuitModal(ModalScreen[bool]):
+    """Modal dialog prompting user for confirmation before quitting."""
+
+    CSS = """
+    ConfirmQuitModal {
+        align: center middle;
+    }
+
+    #confirm-quit-dialog {
+        width: 52;
+        height: auto;
+        border: solid $error;
+        background: $panel;
+        padding: 1;
+    }
+
+    #confirm-quit-title {
+        text-style: bold;
+        color: $error;
+        margin-bottom: 1;
+    }
+
+    #confirm-quit-btn-bar {
+        height: auto;
+        layout: horizontal;
+        align: right middle;
+        margin-top: 1;
+    }
+
+    .confirm-btn {
+        margin-left: 1;
+        min-width: 12;
+    }
+
+    /* Prevent white background rectangle on focused buttons */
+    .confirm-btn:focus {
+        text-style: bold;
+    }
+
+    #btn-confirm-quit {
+        background: #991b1b;
+        color: #ffffff;
+    }
+
+    #btn-confirm-quit:focus {
+        background: #dc2626;
+        color: #ffffff;
+        text-style: bold;
+        border: tall #fca5a5;
+    }
+
+    #btn-cancel-quit {
+        background: #374151;
+        color: #ffffff;
+    }
+
+    #btn-cancel-quit:focus {
+        background: #2563eb;
+        color: #ffffff;
+        text-style: bold;
+        border: tall #93c5fd;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("y", "confirm", "Yes"),
+        ("n", "cancel", "No"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-quit-dialog"):
+            yield Label("Confirm Exit", id="confirm-quit-title")
+            yield Label("Are you sure you want to quit Python AI Agent?")
+            with Horizontal(id="confirm-quit-btn-bar"):
+                yield Button("Yes, Quit", variant="error", id="btn-confirm-quit", classes="confirm-btn")
+                yield Button("Cancel", variant="default", id="btn-cancel-quit", classes="confirm-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-confirm-quit":
+            self.dismiss(True)
+        elif event.button.id == "btn-cancel-quit":
+            self.dismiss(False)
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ModelSelectModal(ModalScreen[Optional[dict]]):
+    """Modal dialog allowing user to choose or input an AI model."""
+
+    CSS = """
+    ModelSelectModal {
+        align: center middle;
+    }
+
+    #model-dialog {
+        width: 76%;
+        max-width: 86;
+        height: auto;
+        max-height: 85%;
+        border: solid $accent;
+        background: $panel;
+        padding: 1;
+    }
+
+    #model-dialog-title {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+
+    #model-options {
+        height: 8;
+        border: solid $secondary;
+        margin-bottom: 1;
+    }
+
+    #custom-model-input {
+        margin-bottom: 1;
+    }
+
+    #model-btn-bar {
+        height: auto;
+        layout: horizontal;
+        align: right middle;
+    }
+
+    .modal-btn {
+        margin-left: 1;
+    }
+
+    .modal-btn:focus {
+        text-style: bold;
+        border: tall $accent;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, current_model: str, **kwargs):
+        super().__init__(**kwargs)
+        self.current_model = current_model
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="model-dialog"):
+            yield Label("Select Active AI Model", id="model-dialog-title")
+            yield Label("Choose a recommended model or type a custom model ID below:")
+
+            options = []
+            for m in RECOMMENDED_FREE_MODELS:
+                badge = "(Active)" if m == self.current_model else "(Free)"
+                options.append(f"{m} {badge}")
+            options.append("qwen2.5-coder:1.5b (Local Ollama)")
+            options.append("llama3.2:1b (Local Ollama)")
+
+            yield OptionList(*options, id="model-options")
+            yield Input(
+                placeholder="Or type custom model (e.g. meta-llama/llama-3.3-70b-instruct:free)...",
+                id="custom-model-input",
+            )
+            with Horizontal(id="model-btn-bar"):
+                yield Button("Select", variant="primary", id="btn-confirm-model", classes="modal-btn")
+                yield Button("Cancel", variant="default", id="btn-cancel-model", classes="modal-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-confirm-model":
+            self.confirm_selection()
+        elif event.button.id == "btn-cancel-model":
+            self.dismiss(None)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.confirm_selection()
+
+    def confirm_selection(self) -> None:
+        custom_val = self.query_one("#custom-model-input", Input).value.strip()
+        if custom_val:
+            if custom_val.startswith("ollama/"):
+                res = {
+                    "model": custom_val[7:],
+                    "is_local": True,
+                    "base_url": DEFAULT_LOCAL_BASE_URL,
+                }
+            else:
+                res = {
+                    "model": custom_val,
+                    "is_local": False,
+                    "base_url": None,
+                }
+            self.dismiss(res)
+            return
+
+        opt_list = self.query_one("#model-options", OptionList)
+        if opt_list.highlighted is not None:
+            prompt_opt = str(opt_list.get_option_at_index(opt_list.highlighted).prompt)
+            model_id = prompt_opt.split(" ")[0]
+            if "(Local Ollama)" in prompt_opt:
+                res = {
+                    "model": model_id,
+                    "is_local": True,
+                    "base_url": DEFAULT_LOCAL_BASE_URL,
+                }
+            else:
+                res = {
+                    "model": model_id,
+                    "is_local": False,
+                    "base_url": None,
+                }
+            self.dismiss(res)
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class FilePreviewModal(ModalScreen[None]):
+    """Modal dialog displaying syntax-highlighted code preview of a workspace file."""
+
+    CSS = """
+    FilePreviewModal {
+        align: center middle;
+    }
+
+    #preview-dialog {
+        width: 88%;
+        height: 88%;
+        border: solid $accent;
+        background: $panel;
+        padding: 1;
+    }
+
+    #preview-header {
+        height: 3;
+        layout: horizontal;
+        margin-bottom: 1;
+    }
+
+    #preview-title {
+        width: 1fr;
+        height: 3;
+        content-align: left middle;
+        text-style: bold;
+        color: $accent;
+    }
+
+    #btn-close-preview {
+        width: 5;
+        min-width: 5;
+        height: 3;
+        text-style: bold;
+        content-align: center middle;
+        background: #dc2626;
+        color: #ffffff;
+    }
+
+    #btn-close-preview:focus {
+        background: #ef4444;
+        text-style: bold;
+        border: tall #ffffff;
+    }
+
+    #preview-log {
+        height: 1fr;
+        border: solid $secondary;
+        background: $background;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss_modal", "Close"),
+    ]
+
+    def __init__(self, file_path: Path, content: str, language: str, **kwargs):
+        super().__init__(**kwargs)
+        self.file_path = file_path
+        self.content = content
+        self.language = language
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="preview-dialog"):
+            with Horizontal(id="preview-header"):
+                yield Label(
+                    f"File Preview: {self.file_path.name} ({len(self.content):,} chars)",
+                    id="preview-title",
+                )
+                yield Button("X", variant="error", id="btn-close-preview")
+            yield RichLog(id="preview-log", highlight=True, markup=True, wrap=True)
+
+    def on_mount(self) -> None:
+        log = self.query_one("#preview-log", RichLog)
+        syntax = Syntax(
+            self.content,
+            self.language,
+            theme="monokai",
+            line_numbers=True,
+            word_wrap=True,
+        )
+        log.write(syntax)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-close-preview":
+            self.dismiss()
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss()
+
+
 class AgentTUIApp(App):
     """Textual Terminal User Interface for Python AI Agent."""
 
     TITLE = "Python AI Agent"
     SUB_TITLE = "Autonomous Multi-Tool Agent"
+    ENABLE_COMMAND_PALETTE = True
+    COMMAND_PALETTE_BINDING = "alt+p"
+
     CSS = """
     Screen {
         layout: vertical;
         background: $surface;
+    }
+
+    /* Prevent white background rectangle on focused buttons globally */
+    Button:focus {
+        text-style: bold;
     }
 
     #status-bar {
@@ -93,6 +447,7 @@ class AgentTUIApp(App):
     #sidebar-toolbar {
         height: 1;
         layout: horizontal;
+        overflow-x: auto;
         margin-bottom: 0;
     }
 
@@ -101,7 +456,7 @@ class AgentTUIApp(App):
         min-height: 1;
         border: none;
         padding: 0 1;
-        margin-right: 1;
+        margin-right: 0;
         background: $panel;
         color: $text-muted;
     }
@@ -149,10 +504,13 @@ class AgentTUIApp(App):
     BINDINGS = [
         ("escape", "quit_app", "Quit"),
         ("ctrl+c", "quit_app", "Quit"),
-        ("f2", "view_files", "Files"),
-        ("f3", "view_tools", "Tools"),
-        ("f4", "view_split", "Split"),
-        ("f5", "refresh_files", "Refresh"),
+        ("alt+1", "view_files", "Files"),
+        ("alt+2", "view_tools", "Tools"),
+        ("alt+3", "view_split", "Split"),
+        ("alt+r", "refresh_files", "Refresh"),
+        ("alt+m", "switch_model", "Model"),
+        ("alt+c", "toggle_chat_expand", "Chat"),
+        ("alt+p", "command_palette", "Palette"),
         ("ctrl+r", "reset_chat", "Reset"),
     ]
 
@@ -176,6 +534,7 @@ class AgentTUIApp(App):
         self.current_status = "IDLE"
         self.daily_limits_text = "Requests: Loading..."
         self.current_view_mode = "files"
+        self.is_chat_expanded = False
 
         # Initialize Agent components
         self.client = create_client(
@@ -213,16 +572,18 @@ class AgentTUIApp(App):
                         id="user-input",
                     )
                     yield Button("Send", variant="primary", id="send-btn", classes="action-btn")
+                    yield Button("Expand", variant="default", id="expand-chat-btn", classes="action-btn")
                     yield Button("Reset", variant="default", id="reset-btn", classes="action-btn")
                     yield Button("Quit", variant="error", id="quit-btn", classes="action-btn")
 
             # Right: Compact Toolbar + Resizable Panels
             with Vertical(id="sidebar"):
                 with Horizontal(id="sidebar-toolbar"):
-                    yield Button("Files (F2)", id="btn-view-files", classes="tab-btn tab-btn-active")
-                    yield Button("Tools (F3)", id="btn-view-tools", classes="tab-btn")
-                    yield Button("Split (F4)", id="btn-view-split", classes="tab-btn")
-                    yield Button("Refresh (F5)", id="btn-refresh-files", classes="tab-btn")
+                    yield Button("Files (Alt+1)", id="btn-view-files", classes="tab-btn tab-btn-active")
+                    yield Button("Tools (Alt+2)", id="btn-view-tools", classes="tab-btn")
+                    yield Button("Split (Alt+3)", id="btn-view-split", classes="tab-btn")
+                    yield Button("Refresh (Alt+R)", id="btn-refresh-files", classes="tab-btn")
+                    yield Button("Model (Alt+M)", id="btn-switch-model", classes="tab-btn")
 
                 with Vertical(id="sidebar-content"):
                     with Vertical(id="files-box") as fb:
@@ -245,7 +606,7 @@ class AgentTUIApp(App):
                 f"• Workspace: [bold]{self.workspace_dir}[/bold]\n"
                 f"• Active Model: [bold green]{self.model}[/bold green]\n"
                 f"• Type your task below and click [bold]Send[/bold].\n"
-                f"• Tool executions and shell logs will display on the right panel.",
+                f"• Press [bold]Alt+M[/bold] for Model Switcher, [bold]Alt+P[/bold] for Command Palette, or click files to preview code.",
                 title="Agent Ready",
                 border_style="cyan",
             )
@@ -297,22 +658,88 @@ class AgentTUIApp(App):
             tool_box.display = True
             btn_split.add_class("tab-btn-active")
 
+    def action_toggle_chat_expand(self) -> None:
+        """Toggle chat container between full width (100%) and split width (52%)."""
+        chat_box = self.query_one("#chat-container", Vertical)
+        sidebar = self.query_one("#sidebar", Vertical)
+        btn_expand = self.query_one("#expand-chat-btn", Button)
+
+        self.is_chat_expanded = not self.is_chat_expanded
+        if self.is_chat_expanded:
+            sidebar.display = False
+            chat_box.styles.width = "100%"
+            btn_expand.label = "Restore"
+            self.notify("Chat expanded to full width", title="View")
+        else:
+            sidebar.display = True
+            chat_box.styles.width = "52%"
+            sidebar.styles.width = "48%"
+            btn_expand.label = "Expand"
+            self.notify("Restored side-by-side view", title="View")
+
     def action_view_files(self) -> None:
         """Switch to Workspace Files view."""
+        if self.is_chat_expanded:
+            self.action_toggle_chat_expand()
         self.set_view_mode("files")
 
     def action_view_tools(self) -> None:
         """Switch to Tool Activity view."""
+        if self.is_chat_expanded:
+            self.action_toggle_chat_expand()
         self.set_view_mode("tools")
 
     def action_view_split(self) -> None:
         """Switch to Split view."""
+        if self.is_chat_expanded:
+            self.action_toggle_chat_expand()
         self.set_view_mode("split")
 
     def action_refresh_files(self) -> None:
         """Manually trigger workspace file tree refresh."""
         self.populate_file_tree()
         self.notify("Workspace files refreshed", title="Files")
+
+    def action_switch_model(self) -> None:
+        """Open the model switcher modal."""
+        def on_model_chosen(res: Optional[dict]) -> None:
+            if res:
+                self.switch_to_model(res)
+
+        self.push_screen(ModelSelectModal(current_model=self.model), on_model_chosen)
+
+    def switch_to_model(self, model_config: dict) -> None:
+        """Switch active model and client configuration."""
+        new_model = model_config["model"]
+        is_local = model_config.get("is_local", False)
+        base_url = model_config.get("base_url")
+
+        self.model = new_model
+        self.is_local = is_local
+        self.base_url = base_url
+
+        try:
+            self.client = create_client(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                is_local=self.is_local,
+            )
+            self.agent.client = self.client
+            self.agent.model = self.model
+            self.update_telemetry()
+
+            mode_desc = "Local Ollama" if self.is_local else "OpenRouter"
+            chat_log = self.query_one("#chat-log", RichLog)
+            chat_log.write(
+                Panel(
+                    f"Switched active model to [bold cyan]{self.model}[/bold cyan] ({mode_desc})",
+                    title="Model Changed",
+                    border_style="cyan",
+                )
+            )
+            self.notify(f"Switched to {self.model}", title="Model Updated")
+        except Exception as e:
+            self.notify(f"Failed to switch model: {e}", title="Error", severity="error")
 
     def action_reset_chat(self) -> None:
         """Reset conversation context."""
@@ -323,18 +750,46 @@ class AgentTUIApp(App):
         self.update_telemetry()
 
     def action_quit_app(self) -> None:
-        """Exit the application."""
-        self.exit()
+        """Prompt user with confirmation modal before quitting."""
+        def on_confirm(should_quit: Optional[bool]) -> None:
+            if should_quit:
+                self.exit()
+
+        self.push_screen(ConfirmQuitModal(), on_confirm)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Toggle directory expansion on click or selection."""
-        event.node.toggle()
+        """Toggle directory expansion or open file preview for files."""
+        node_data = event.node.data
+        if isinstance(node_data, Path):
+            if node_data.is_dir():
+                event.node.toggle()
+            elif node_data.is_file():
+                self.open_file_preview(node_data)
+        else:
+            event.node.toggle()
+
+    def open_file_preview(self, file_path: Path) -> None:
+        """Read and open modal file preview."""
+        try:
+            if file_path.stat().st_size > 500_000:
+                content = f"[File exceeds 500 KB limit ({file_path.stat().st_size:,} bytes)]"
+                lang = "text"
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                lang = detect_language(file_path)
+        except Exception as e:
+            content = f"Error reading file: {e}"
+            lang = "text"
+
+        self.push_screen(FilePreviewModal(file_path=file_path, content=content, language=lang))
 
     def populate_file_tree(self) -> None:
         """Populate the sidebar workspace file tree."""
         tree = self.query_one("#file-tree", Tree)
         tree.clear()
         tree.root.label = f"[{self.workspace_dir.name}]"
+        tree.root.data = self.workspace_dir
         tree.root.expand()
 
         ignore_names = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", ".idea", ".vscode"}
@@ -348,10 +803,10 @@ class AgentTUIApp(App):
                     if entry.name in ignore_names:
                         continue
                     if entry.is_dir():
-                        branch = parent_node.add(f"[DIR] {entry.name}", expand=False)
+                        branch = parent_node.add(f"[DIR] {entry.name}", expand=False, data=entry)
                         add_nodes(branch, entry, depth + 1)
                     else:
-                        parent_node.add_leaf(entry.name)
+                        parent_node.add_leaf(entry.name, data=entry)
             except Exception:
                 pass
 
@@ -364,6 +819,8 @@ class AgentTUIApp(App):
             self.action_reset_chat()
         elif event.button.id == "quit-btn":
             self.action_quit_app()
+        elif event.button.id == "expand-chat-btn":
+            self.action_toggle_chat_expand()
         elif event.button.id == "btn-view-files":
             self.action_view_files()
         elif event.button.id == "btn-view-tools":
@@ -372,6 +829,8 @@ class AgentTUIApp(App):
             self.action_view_split()
         elif event.button.id == "btn-refresh-files":
             self.action_refresh_files()
+        elif event.button.id == "btn-switch-model":
+            self.action_switch_model()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "user-input":
@@ -494,6 +953,8 @@ class AgentTUIApp(App):
             self.update_telemetry()
 
             # Ensure tool activity is visible while tool is running
+            if self.is_chat_expanded:
+                self.action_toggle_chat_expand()
             if self.current_view_mode == "files" and self.size.height >= 18:
                 self.set_view_mode("split")
             elif self.current_view_mode == "files":
