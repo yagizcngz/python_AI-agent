@@ -72,16 +72,100 @@ def fetch_account_usage(api_key: Optional[str] = None) -> Optional[dict]:
         return None
 
     import json
+    import time
     import urllib.request
 
     try:
+        url = f"https://openrouter.ai/api/v1/key?_={int(time.time() * 1000)}"
         req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/key",
-            headers={"Authorization": f"Bearer {key}", "User-Agent": "python-ai-agent"},
+            url,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "User-Agent": "python-ai-agent",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            },
         )
         with urllib.request.urlopen(req, timeout=5.0) as res:
             payload = json.loads(res.read().decode("utf-8"))
             return payload.get("data")
     except Exception:
         return None
+
+
+_MODEL_CACHE: Optional[set[str]] = None
+
+
+def get_all_valid_models(force_refresh: bool = False) -> set[str]:
+    """
+    Fetch and cache the full set of valid OpenRouter model IDs.
+    Returns cached set if already fetched in the current process.
+    """
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None and not force_refresh:
+        return _MODEL_CACHE
+
+    import json
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/models",
+            headers={"User-Agent": "python-ai-agent"},
+        )
+        with urllib.request.urlopen(req, timeout=6.0) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            models = {m["id"] for m in data.get("data", [])}
+            if models:
+                _MODEL_CACHE = models
+                return _MODEL_CACHE
+    except Exception:
+        pass
+
+    if _MODEL_CACHE is None:
+        _MODEL_CACHE = set(RECOMMENDED_FREE_MODELS)
+    return _MODEL_CACHE
+
+
+def validate_model_id(
+    model_id: str,
+    is_local: bool = False,
+    base_url: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    Check if a model exists on OpenRouter or local server.
+    Returns (is_valid, resolved_model_or_error_message).
+    """
+    cleaned = model_id.strip()
+    if not cleaned:
+        return False, "Model ID cannot be empty."
+
+    # If it's a local Ollama model
+    if is_local or cleaned.startswith("ollama/"):
+        return True, cleaned[7:] if cleaned.startswith("ollama/") else cleaned
+
+    if cleaned in RECOMMENDED_FREE_MODELS:
+        return True, cleaned
+
+    valid_models = get_all_valid_models()
+
+    if cleaned in valid_models:
+        return True, cleaned
+
+    # Check without :free suffix if present, or with :free suffix
+    if cleaned.endswith(":free") and cleaned[:-5] in valid_models:
+        return True, cleaned
+    if f"{cleaned}:free" in valid_models:
+        return True, cleaned
+
+    # Case-insensitive match check
+    lowered = {m.lower(): m for m in valid_models}
+    if cleaned.lower() in lowered:
+        return True, lowered[cleaned.lower()]
+
+    base_lower = cleaned[:-5].lower() if cleaned.endswith(":free") else cleaned.lower()
+    if base_lower in lowered:
+        return True, lowered[base_lower]
+
+    return False, f"Model '{cleaned}' does not exist on OpenRouter."
 

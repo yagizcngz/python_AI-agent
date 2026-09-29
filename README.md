@@ -112,14 +112,18 @@ Simply run the application without arguments, or run `run.bat`:
 python app/main.py
 # or double-click run.bat
 ```
-* **UI Controls & Buttons:**
-  * **Files (F2):** Display full workspace file tree.
-  * **Tools (F3):** Display full tool activity and shell logs.
-  * **Split (F4):** Display both tool activity and workspace files side-by-side/stacked.
-  * **Refresh (F5):** Refresh workspace file tree.
-  * **Send Button:** Submit current prompt.
-  * **Reset Button (Ctrl+R):** Clear conversation context.
-  * **Quit Button (Esc):** Exit the application.
+* **UI Controls & Shortcuts:**
+  * **Files (Alt+1):** Display workspace file tree. Click any file to open the syntax-highlighted File Preview modal (with close button [ X ]).
+  * **Tools (Alt+2):** Display full tool activity and execution logs.
+  * **Split (Alt+3):** Display both tool activity and workspace files in stacked split view.
+  * **Chat (Alt+C):** Toggle full-width chat focus or restore side-by-side workspace split.
+  * **Refresh (Alt+R):** Refresh the workspace file tree.
+  * **Model (Alt+M):** Open the interactive Model Switcher dialog to select from recommended free models, local Ollama, or custom model IDs.
+  * **Send (Enter):** Submit current prompt.
+  * **Reset (Ctrl+R):** Clear conversation context and reset token telemetry.
+  * **Palette (Alt+P):** Open Textual's command palette for theme switching and screenshot capture.
+  * **Keys (F1 / ?):** Open the dedicated Keyboard Shortcuts modal with clean list and [ X ] close button.
+  * **Quit (Esc):** Bottom-bar button or Esc prompts with a Confirm Exit modal before quitting.
 
 ---
 
@@ -189,6 +193,7 @@ Tests cover:
 * Path sandboxing & directory traversal prevention (`tests/test_sandbox.py`)
 * Tool operations (`Read`, `Write`, `Edit`, `ListDir`, `Bash`, timeouts) (`tests/test_tools.py`)
 * ReAct reasoning loop, step limits, and mocked API responses (`tests/test_agent.py`)
+* Responsive TUI layout, modal screens, and small/tall terminal rendering (`tests/test_tui_layout.py`)
 
 ---
 

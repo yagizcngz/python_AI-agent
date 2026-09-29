@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
-from ai_agent.ui.tui import AgentTUIApp, ModelSelectModal, FilePreviewModal, ConfirmQuitModal
+from textual.widgets import Button, Input, Label
+from ai_agent.ui.tui import AgentTUIApp, ModelSelectModal, FilePreviewModal, ConfirmQuitModal, KeysModal
 
 def test_tui_small_mode_workspace_files():
     async def _run():
@@ -71,17 +72,48 @@ def test_tui_model_switcher_modal():
 
             # Verify modal is active
             assert isinstance(app.screen, ModelSelectModal)
-            # Dismiss modal with a new model
-            app.screen.dismiss({
-                "model": "nvidia/nemotron-3.5-lightning:free",
-                "is_local": False,
-                "base_url": None,
-            })
-            await pilot.pause()
+            custom_input = app.screen.query_one("#custom-model-input", Input)
+            confirm_btn = app.screen.query_one("#btn-confirm-model", Button)
 
-            # Verify active model updated
-            assert app.model == "nvidia/nemotron-3.5-lightning:free"
-            assert app.agent.model == "nvidia/nemotron-3.5-lightning:free"
+            # Test invalid model ID (e.g. 'asd')
+            custom_input.value = "asd"
+            confirm_btn.press()
+            await pilot.pause()
+            # Modal must NOT dismiss
+            assert isinstance(app.screen, ModelSelectModal)
+            err_lbl = app.screen.query_one("#model-error-msg", Label)
+            assert err_lbl.display is True
+
+            # Test valid model ID (e.g. 'openai/gpt-4o')
+            custom_input.value = "openai/gpt-4o"
+            confirm_btn.press()
+            await pilot.pause()
+            # Modal must dismiss and update active model
+            assert not isinstance(app.screen, ModelSelectModal)
+            assert app.model == "openai/gpt-4o"
+            assert app.agent.model == "openai/gpt-4o"
+
+            # Re-open and verify close [ X ] button
+            app.action_switch_model()
+            await pilot.pause()
+            assert isinstance(app.screen, ModelSelectModal)
+            close_btn = app.screen.query_one("#btn-close-model", Button)
+            assert close_btn.label == "X"
+            close_btn.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, ModelSelectModal)
+
+        # Verify model modal renders properly without clipping on small terminal height
+        app_small = AgentTUIApp()
+        async with app_small.run_test(size=(80, 14)) as small_pilot:
+            await small_pilot.pause()
+            app_small.action_switch_model()
+            await small_pilot.pause()
+            assert isinstance(app_small.screen, ModelSelectModal)
+            confirm = app_small.screen.query_one("#btn-confirm-model", Button)
+            dialog = app_small.screen.query_one("#model-dialog")
+            assert confirm.region.y + confirm.region.height <= dialog.region.y + dialog.region.height
+            app_small.screen.dismiss(None)
     asyncio.run(_run())
 
 
@@ -139,4 +171,137 @@ def test_tui_chat_expand_toggle():
             await pilot.pause()
             assert sidebar.display is True
             assert app.is_chat_expanded is False
+    asyncio.run(_run())
+
+
+def test_tui_bottom_bar_actions():
+    async def _run():
+        app = AgentTUIApp()
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause()
+            # Verify bottom bar and buttons exist
+            bottom_bar = app.query_one("#bottom-bar")
+            btn_files = app.query_one("#btn-view-files")
+            btn_tools = app.query_one("#btn-view-tools")
+            btn_split = app.query_one("#btn-view-split")
+            btn_chat = app.query_one("#expand-chat-btn")
+            btn_palette = app.query_one("#btn-palette")
+            btn_quit = app.query_one("#quit-btn")
+            assert bottom_bar is not None
+            assert btn_files is not None
+            assert btn_quit is not None
+            assert btn_palette.label == "PALETTE"
+
+            # Click TOOLS button
+            await pilot.click("#btn-view-tools")
+            await pilot.pause()
+            assert app.current_view_mode == "tools"
+            assert "bottom-btn-active" in btn_tools.classes
+
+            # Click FILES button
+            await pilot.click("#btn-view-files")
+            await pilot.pause()
+            assert app.current_view_mode == "files"
+            assert "bottom-btn-active" in btn_files.classes
+
+            # Click SPLIT button
+            await pilot.click("#btn-view-split")
+            await pilot.pause()
+            assert app.current_view_mode == "split"
+            assert "bottom-btn-active" in btn_split.classes
+
+            # Click CHAT button to expand full-width
+            btn_chat.press()
+            await pilot.pause()
+            assert app.is_chat_expanded is True
+            assert btn_chat.label == "RESTORE"
+
+            # Click again to restore
+            btn_chat.press()
+            await pilot.pause()
+            assert app.is_chat_expanded is False
+            assert btn_chat.label == "CHAT"
+
+            # Click PALETTE button to open Command Palette
+            btn_palette.press()
+            await pilot.pause()
+            from textual.command import CommandPalette
+            assert isinstance(app.screen, CommandPalette)
+            # Verify red [ X ] button exists on the palette
+            palette_close_btn = app.screen.query_one("#btn-close-palette", Button)
+            assert palette_close_btn.label == "X"
+            palette_close_btn.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, CommandPalette)
+
+            # Click QUIT button to open ConfirmQuitModal
+            btn_quit.press()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmQuitModal)
+            app.screen.dismiss(False)
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_tui_keys_modal():
+    async def _run():
+        app = AgentTUIApp()
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause()
+            # Trigger help action (F1 or keys)
+            app.action_help()
+            await pilot.pause()
+            assert isinstance(app.screen, KeysModal)
+
+            # Check close button X
+            close_btn = app.screen.query_one("#btn-close-keys", Button)
+            assert close_btn.label == "X"
+            close_btn.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, KeysModal)
+
+            # Open Command Palette and trigger Keys
+            await pilot.press("alt+p")
+            await pilot.pause(0.2)
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, KeysModal)
+            keys_close = app.screen.query_one("#btn-close-keys", Button)
+            keys_close.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, KeysModal)
+    asyncio.run(_run())
+
+
+def test_tui_screen_fit_dimensions():
+    async def _run():
+        for height in (20, 24, 30):
+            app = AgentTUIApp()
+            async with app.run_test(size=(100, height)) as pilot:
+                await pilot.pause()
+                main_c = app.query_one("#main-container")
+                bottom = app.query_one("#bottom-bar")
+                # Bottom bar touches the exact bottom row
+                assert bottom.region.y + bottom.region.height == height
+                # Main container does not overflow below screen height
+                assert main_c.region.y + main_c.region.height <= height
+
+                # Verify SEND button is compact and does not overlap
+                send_btn = app.query_one("#send-btn")
+                assert send_btn.region.width <= 10
+
+                # Verify HeaderIcon on top of status is hidden
+                from textual.widgets._header import HeaderIcon
+                header_icon = app.query_one(HeaderIcon)
+                assert header_icon.display is False
+
+                # Verify StaticHeader cannot be clicked to expand
+                from ai_agent.ui.tui import StaticHeader
+                header = app.query_one(StaticHeader)
+                assert header.region.height == 1
+                await pilot.click(StaticHeader)
+                await pilot.pause()
+                assert header.region.height == 1
+                assert not header.has_class("-tall")
     asyncio.run(_run())

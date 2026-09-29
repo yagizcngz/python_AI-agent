@@ -27,7 +27,9 @@ def build_default_system_prompt() -> str:
         "2. When modifying existing files, prefer the Edit tool to change specific blocks rather than rewriting entire files.\n"
         "3. Provide clean, concise answers and confirm when tasks have been completed.\n"
         "4. Work iteratively: inspect files first, plan changes, apply them, and verify results.\n"
-        "5. Do NOT use any emojis in your responses or outputs. Keep all text plain, clear, and professional."
+        "5. Do NOT use any emojis in your responses or outputs. Keep all text plain, clear, and professional.\n"
+        "6. Your current working directory is already the project workspace root. All relative paths are evaluated directly inside this root. "
+        "If the user refers to the project root folder name in their instructions, operate directly within the workspace root—do NOT create a nested folder with the same name."
     )
 
 
