@@ -127,6 +127,15 @@ def get_all_valid_models(force_refresh: bool = False) -> set[str]:
     return _MODEL_CACHE
 
 
+def get_all_free_models(force_refresh: bool = False) -> List[str]:
+    """Fetch and return all active free models (:free) from OpenRouter."""
+    models = get_all_valid_models(force_refresh=force_refresh)
+    free = [m for m in models if ":free" in m]
+    if not free:
+        return list(RECOMMENDED_FREE_MODELS)
+    return sorted(free)
+
+
 def validate_model_id(
     model_id: str,
     is_local: bool = False,

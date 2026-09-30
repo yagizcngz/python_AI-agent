@@ -42,11 +42,35 @@ from ..config import (
     WORKSPACE_DIR,
 )
 from ..core.agent import Agent, AgentEvent, AgentEventType
-from ..core.client import create_client, fetch_account_usage, validate_model_id
+from ..core.client import create_client, fetch_account_usage, get_all_free_models, validate_model_id
+from ..core.keys import KeyManager
 from ..core.memory import ConversationMemory
+from ..core.system_info import check_local_model_installed, evaluate_specs_for_model
 from ..tools.base import ToolRegistry
 from ..tools.filesystem import EditTool, ListDirTool, ReadTool, WriteTool
 from ..tools.shell import BashTool
+
+# Universal terminal compatibility: ensure scrollbars and tree indicators use safe characters
+# so that they render cleanly across all terminals (VS Code, Windows cmd.exe, legacy fonts) without [?][?]
+try:
+    import textual.scrollbar as _tb_scrollbar
+    _tb_scrollbar.ScrollBarRender.VERTICAL_BARS = [" "] * 8
+    _tb_scrollbar.ScrollBarRender.HORIZONTAL_BARS = [" "] * 8
+except Exception:
+    pass
+
+try:
+    Tree.ICON_NODE = "> "
+    Tree.ICON_NODE_EXPANDED = "v "
+except Exception:
+    pass
+
+try:
+    import textual._border as _tb_border
+    _tb_border.BORDER_CHARS["tall"] = _tb_border.BORDER_CHARS.get("solid", _tb_border.BORDER_CHARS["ascii"])
+    _tb_border.BORDER_CHARS["panel"] = _tb_border.BORDER_CHARS.get("solid", _tb_border.BORDER_CHARS["ascii"])
+except Exception:
+    pass
 
 
 def detect_language(path: Path) -> str:
@@ -104,35 +128,34 @@ class ConfirmQuitModal(ModalScreen[bool]):
     .confirm-btn {
         margin-left: 1;
         min-width: 12;
-    }
-
-    /* Prevent white background rectangle on focused buttons */
-    .confirm-btn:focus {
+        height: 3;
         text-style: bold;
     }
 
     #btn-confirm-quit {
         background: #991b1b;
         color: #ffffff;
+        border: solid #b91c1c;
     }
 
+    #btn-confirm-quit:hover,
     #btn-confirm-quit:focus {
         background: #dc2626;
         color: #ffffff;
-        text-style: bold;
-        border: tall #fca5a5;
+        border: solid #fca5a5;
     }
 
     #btn-cancel-quit {
         background: #374151;
         color: #ffffff;
+        border: solid #4b5563;
     }
 
+    #btn-cancel-quit:hover,
     #btn-cancel-quit:focus {
         background: #2563eb;
         color: #ffffff;
-        text-style: bold;
-        border: tall #93c5fd;
+        border: solid #93c5fd;
     }
     """
 
@@ -260,6 +283,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
     def __init__(self, current_model: str, **kwargs):
         super().__init__(**kwargs)
         self.current_model = current_model
+        self.showing_all_free = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-dialog"):
@@ -282,6 +306,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
             )
             yield Label("", id="model-error-msg")
             with Horizontal(id="model-btn-bar"):
+                yield Button("All Free Models", variant="default", id="btn-toggle-all-free", classes="modal-btn")
                 yield Button("Select", variant="primary", id="btn-confirm-model", classes="modal-btn")
                 yield Button("Cancel", variant="default", id="btn-cancel-model", classes="modal-btn")
 
@@ -305,14 +330,48 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
         except Exception:
             pass
 
+    def toggle_free_models(self) -> None:
+        """Toggle between recommended models and full catalog of free OpenRouter models."""
+        opt_list = self.query_one("#model-options", OptionList)
+        btn = self.query_one("#btn-toggle-all-free", Button)
+        opt_list.clear_options()
+
+        if not self.showing_all_free:
+            self.showing_all_free = True
+            btn.label = "Recommended"
+            free_models = get_all_free_models()
+            for m in free_models:
+                badge = "(Active)" if m == self.current_model else "(Free)"
+                opt_list.add_option(f"{m} {badge}")
+            opt_list.add_option("qwen2.5-coder:1.5b (Local Ollama)")
+            opt_list.add_option("llama3.2:1b (Local Ollama)")
+        else:
+            self.showing_all_free = False
+            btn.label = "All Free Models"
+            for m in RECOMMENDED_FREE_MODELS:
+                badge = "(Active)" if m == self.current_model else "(Free)"
+                opt_list.add_option(f"{m} {badge}")
+            opt_list.add_option("qwen2.5-coder:1.5b (Local Ollama)")
+            opt_list.add_option("llama3.2:1b (Local Ollama)")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-confirm-model":
             self.confirm_selection()
+        elif event.button.id == "btn-toggle-all-free":
+            self.toggle_free_models()
         elif event.button.id in ("btn-cancel-model", "btn-close-model"):
             self.dismiss(None)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.confirm_selection()
+        # Clear custom model input so the highlighted option from list takes precedence when Select is pressed
+        try:
+            self.query_one("#custom-model-input", Input).value = ""
+        except Exception:
+            pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "custom-model-input":
+            self.confirm_selection()
 
     def confirm_selection(self) -> None:
         custom_val = self.query_one("#custom-model-input", Input).value.strip()
@@ -327,6 +386,13 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
                 err_label.update(f"[bold red]{resolved}[/bold red]")
                 err_label.display = True
                 return
+
+            if is_local:
+                is_installed, reason, _ = check_local_model_installed(resolved)
+                if not is_installed:
+                    spec_eval = evaluate_specs_for_model(resolved)
+                    self.app.push_screen(LocalModelGuideModal(model_name=resolved, reason=reason, spec_eval=spec_eval))
+                    return
 
             err_label.display = False
             res = {
@@ -343,6 +409,12 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
             prompt_opt = str(opt_list.get_option_at_index(opt_list.highlighted).prompt)
             model_id = prompt_opt.split(" ")[0]
             if "(Local Ollama)" in prompt_opt:
+                is_installed, reason, _ = check_local_model_installed(model_id)
+                if not is_installed:
+                    spec_eval = evaluate_specs_for_model(model_id)
+                    self.app.push_screen(LocalModelGuideModal(model_name=model_id, reason=reason, spec_eval=spec_eval))
+                    return
+
                 res = {
                     "model": model_id,
                     "is_local": True,
@@ -360,6 +432,139 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class LocalModelGuideModal(ModalScreen[None]):
+    """Modal displaying hardware compatibility and step-by-step local model install instructions."""
+
+    CSS = """
+    LocalModelGuideModal {
+        align: center middle;
+    }
+
+    #local-guide-dialog {
+        width: 82;
+        max-width: 95%;
+        height: auto;
+        max-height: 90%;
+        border: solid $warning;
+        background: $panel;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+
+    #local-guide-header {
+        height: 1;
+        layout: horizontal;
+        margin-bottom: 1;
+    }
+
+    #local-guide-title {
+        width: 1fr;
+        text-style: bold;
+        color: #fbbf24;
+    }
+
+    #btn-close-local-guide {
+        width: 4;
+        min-width: 4;
+        height: 1;
+        border: none;
+        padding: 0;
+        text-style: bold;
+        content-align: center middle;
+        background: #dc2626;
+        color: #ffffff;
+    }
+
+    #btn-close-local-guide:hover, #btn-close-local-guide:focus {
+        background: #ef4444;
+        border: none;
+    }
+
+    #local-guide-btn-bar {
+        height: 3;
+        layout: horizontal;
+        align: right middle;
+        margin-top: 1;
+    }
+
+    #btn-guide-back {
+        height: 3;
+        min-height: 3;
+        border: solid #0284c7;
+        background: #0284c7;
+        color: #ffffff;
+        text-style: bold;
+        padding: 0 2;
+    }
+
+    #btn-guide-back:hover, #btn-guide-back:focus {
+        background: #38bdf8;
+        color: #02131f;
+        border: solid #38bdf8;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss_modal", "Close"),
+    ]
+
+    def __init__(self, model_name: str, reason: str, spec_eval: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.model_name = model_name
+        self.reason = reason
+        self.spec_eval = spec_eval
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="local-guide-dialog"):
+            with Horizontal(id="local-guide-header"):
+                yield Label("LOCAL MODEL SETUP & SPECS CHECK", id="local-guide-title")
+                yield Button("X", variant="error", id="btn-close-local-guide")
+
+            ram_badge = "[bold green][PASS][/bold green]" if self.spec_eval["ram_pass"] else "[bold red][LOW RAM][/bold red]"
+            disk_badge = "[bold green][PASS][/bold green]" if self.spec_eval["disk_pass"] else "[bold red][LOW DISK][/bold red]"
+            verdict_color = "green" if self.spec_eval["is_compatible"] else "yellow"
+
+            drives = self.spec_eval.get("drives", {})
+            if len(drives) > 1:
+                parts = [f"{d['free_gb']} GB ({letter}:)" for letter, d in drives.items()]
+                disk_display = ", ".join(parts)
+            else:
+                disk_display = f"{self.spec_eval['free_disk_gb']} GB Free"
+
+            yield Label("[bold #38bdf8]1. PC Hardware Compatibility Check:[/bold #38bdf8]")
+            yield Label(f"  * Model Target: [bold cyan]{self.model_name}[/bold cyan] ({self.spec_eval.get('approx_download', '')} download)")
+            yield Label(f"  * System RAM:   {self.spec_eval['total_ram_gb']} GB Total ({self.spec_eval['avail_ram_gb']} GB Avail) - Need {self.spec_eval['min_ram_gb']} GB {ram_badge}")
+            yield Label(f"  * Free Disk:    {disk_display} - Need {self.spec_eval['min_disk_gb']} GB {disk_badge}")
+            yield Label(f"  * Assessment:   [bold {verdict_color}]{self.spec_eval['verdict']}[/bold {verdict_color}]")
+            if "D" in drives and drives["D"]["free_gb"] >= 10.0:
+                yield Label(f"  [dim]* Tip: Large drive D: ({drives['D']['free_gb']} GB free) can store models via OLLAMA_MODELS[/dim]")
+            yield Label("")
+
+            yield Label("[bold #38bdf8]2. How to Download & Run This Model:[/bold #38bdf8]")
+            if self.reason == "ollama_offline":
+                yield Label("  Ollama service is not running or not installed on your system.")
+                yield Label("  [dim]-------------------------------------------------------------[/dim]")
+                yield Label("  Step 1: Download Ollama for Windows from [bold cyan]https://ollama.com/download[/bold cyan]")
+                yield Label("  Step 2: Start the Ollama application on your PC.")
+                yield Label(f"  Step 3: Open terminal and run: [bold #fbbf24]ollama run {self.model_name}[/bold #fbbf24]")
+            else:
+                yield Label(f"  Ollama is running, but [bold cyan]{self.model_name}[/bold cyan] is not yet downloaded.")
+                yield Label("  [dim]-------------------------------------------------------------[/dim]")
+                yield Label(f"  In terminal, run: [bold #fbbf24]ollama run {self.model_name}[/bold #fbbf24]")
+
+            yield Label("  Step 4: Once downloaded, return to this menu and select the model.")
+
+            with Horizontal(id="local-guide-btn-bar"):
+                yield Button("Back to Model Selection", id="btn-guide-back")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in ("btn-close-local-guide", "btn-guide-back"):
+            self.dismiss()
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss()
 
 
 class FilePreviewModal(ModalScreen[None]):
@@ -405,7 +610,7 @@ class FilePreviewModal(ModalScreen[None]):
     #btn-close-preview:focus {
         background: #ef4444;
         text-style: bold;
-        border: tall #ffffff;
+        border: none;
     }
 
     #preview-log {
@@ -500,7 +705,7 @@ class KeysModal(ModalScreen[None]):
     #btn-close-keys:focus, #btn-close-keys:hover {
         background: #ef4444;
         text-style: bold;
-        border: tall #ffffff;
+        border: none;
     }
 
     #keys-log {
@@ -568,7 +773,7 @@ class CustomCommandPalette(CommandPalette):
     CustomCommandPalette #btn-close-palette:hover,
     CustomCommandPalette #btn-close-palette:focus {
         background: #ef4444;
-        border: tall #ffffff;
+        border: none;
     }
     """
 
@@ -857,12 +1062,16 @@ class AgentTUIApp(App):
 
         self.current_step = 0
         self.current_status = "IDLE"
-        self.daily_limits_text = "Requests: Loading..."
+        self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]" if self.is_local else "Requests: Loading..."
         self.cached_remaining_requests: Optional[int] = None
         self.cached_limit_requests: Optional[int] = None
         self.cached_used_requests: Optional[int] = None
         self.current_view_mode = "files"
         self.is_chat_expanded = False
+
+        self.key_manager = KeyManager()
+        if not self.api_key:
+            self.api_key = self.key_manager.get_current_key()
 
         # Initialize Agent components
         self.client = create_client(
@@ -884,6 +1093,9 @@ class AgentTUIApp(App):
             tools=self.tools,
             memory=self.memory,
             event_handler=self.on_agent_event,
+            key_manager=self.key_manager,
+            is_local=self.is_local,
+            base_url=self.base_url,
         )
         self.is_busy = False
 
@@ -950,11 +1162,6 @@ class AgentTUIApp(App):
             "Screenshot",
             "Save an SVG screenshot of the current screen",
             self.action_screenshot,
-        )
-        yield SystemCommand(
-            "Quit",
-            "Quit application with confirmation",
-            self.action_quit_app,
         )
 
     def action_command_palette(self) -> None:
@@ -1025,7 +1232,8 @@ class AgentTUIApp(App):
 
         self.populate_file_tree()
         self.update_telemetry()
-        self.refresh_account_limits()
+        if not self.is_local:
+            self.refresh_account_limits()
 
         # In small terminal mode, start in files mode so files are 100% visible
         if self.size.height < 18:
@@ -1130,6 +1338,15 @@ class AgentTUIApp(App):
             )
             self.agent.client = self.client
             self.agent.model = self.model
+            self.agent.is_local = self.is_local
+            self.agent.base_url = self.base_url
+
+            if self.is_local:
+                self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+            else:
+                self.daily_limits_text = "Requests: Loading..."
+                self.refresh_account_limits()
+
             self.update_telemetry()
 
             mode_desc = "Local Ollama" if self.is_local else "OpenRouter"
@@ -1179,15 +1396,10 @@ class AgentTUIApp(App):
         self.push_screen(ConfirmQuitModal(), on_confirm)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Toggle directory expansion or open file preview for files."""
+        """Open file preview for files. Directory expansion/collapse is handled automatically by Tree."""
         node_data = event.node.data
-        if isinstance(node_data, Path):
-            if node_data.is_dir():
-                event.node.toggle()
-            elif node_data.is_file():
-                self.open_file_preview(node_data)
-        else:
-            event.node.toggle()
+        if isinstance(node_data, Path) and node_data.is_file():
+            self.open_file_preview(node_data)
 
     def open_file_preview(self, file_path: Path) -> None:
         """Read and open modal file preview."""
@@ -1306,16 +1518,20 @@ class AgentTUIApp(App):
         self.current_status = "IDLE"
         self.populate_file_tree()
 
-        # Optimistically decrement remaining requests count immediately
-        if self.cached_remaining_requests is not None and self.cached_remaining_requests > 0:
-            self.cached_remaining_requests -= 1
-            self.cached_used_requests = (self.cached_used_requests or 0) + 1
-            lim = self.cached_limit_requests or 50
-            self.daily_limits_text = f"Requests: [bold green]{self.cached_remaining_requests}/{lim} left[/bold green] ({self.cached_used_requests} used)"
+        if self.is_local:
+            self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+        else:
+            # Optimistically decrement remaining requests count immediately
+            if self.cached_remaining_requests is not None and self.cached_remaining_requests > 0:
+                self.cached_remaining_requests -= 1
+                self.cached_used_requests = (self.cached_used_requests or 0) + 1
+                lim = self.cached_limit_requests or 50
+                self.daily_limits_text = f"Requests: [bold green]{self.cached_remaining_requests}/{lim} left[/bold green] ({self.cached_used_requests} used)"
+
+            # Fetch authoritative count from OpenRouter after 2-second backend ingestion delay
+            self.refresh_account_limits(delay=2.0)
 
         self.update_telemetry()
-        # Fetch authoritative count from OpenRouter after 2-second backend ingestion delay
-        self.refresh_account_limits(delay=2.0)
         self.query_one("#user-input", Input).focus()
 
     def update_telemetry(self, status_text: Optional[str] = None) -> None:
@@ -1329,11 +1545,12 @@ class AgentTUIApp(App):
             else:
                 st_color = "green"
 
-            tokens_str = f"{self.memory.total_prompt_tokens:,}p / {self.memory.total_completion_tokens:,}c"
+            tokens_str = f"{self.memory.total_prompt_tokens:,} in | {self.memory.total_completion_tokens:,} out"
+            limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]" if self.is_local else self.daily_limits_text
             bar_text = (
                 f"Status: [bold {st_color}]{status}[/bold {st_color}] | "
                 f"Model: [bold cyan]{self.model}[/bold cyan] | "
-                f"{self.daily_limits_text} | "
+                f"{limits_text} | "
                 f"Tokens: {tokens_str} | "
                 f"Step: {self.current_step}/{self.agent.max_steps}"
             )
@@ -1343,7 +1560,12 @@ class AgentTUIApp(App):
 
     @work(thread=True)
     def refresh_account_limits(self, delay: float = 0.0) -> None:
-        """Fetch live remaining limits in background thread with optional delay."""
+        """Fetch live remaining limits in background thread with optional delay and auto-rotation."""
+        if self.is_local:
+            self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+            self.call_from_thread(self.update_telemetry)
+            return
+
         import time
         if delay > 0:
             time.sleep(delay)
@@ -1355,7 +1577,30 @@ class AgentTUIApp(App):
             self.cached_remaining_requests = daily.get("remaining", 0)
             self.cached_limit_requests = daily.get("limit", 0)
             self.cached_used_requests = daily.get("used", 0)
-            self.daily_limits_text = f"Requests: [bold green]{self.cached_remaining_requests}/{self.cached_limit_requests} left[/bold green] ({self.cached_used_requests} used)"
+
+            # Auto-rotate key if current key has exhausted its daily quota and more keys exist
+            if self.cached_remaining_requests == 0 and self.key_manager.has_multiple_keys:
+                success, new_key, msg = self.key_manager.rotate_key()
+                if success:
+                    self.api_key = new_key
+                    self.client = create_client(api_key=new_key, base_url=self.base_url, is_local=self.is_local)
+                    self.agent.client = self.client
+                    self.notify(f"API key quota reached. Auto-switched to key {self.key_manager.current_index + 1}/{self.key_manager.total_keys}.", severity="warning")
+                    new_usage = fetch_account_usage(new_key)
+                    if new_usage and new_usage.get("free_model_daily_requests"):
+                        new_daily = new_usage["free_model_daily_requests"]
+                        self.cached_remaining_requests = new_daily.get("remaining", 0)
+                        self.cached_limit_requests = new_daily.get("limit", 0)
+                        self.cached_used_requests = new_daily.get("used", 0)
+
+            key_tag = f" (Key {self.key_manager.current_index + 1}/{self.key_manager.total_keys})" if self.key_manager.has_multiple_keys else ""
+            if self.cached_remaining_requests == 0 and len(self.key_manager.exhausted_keys) >= self.key_manager.total_keys:
+                self.daily_limits_text = f"Requests: [bold red]0/{self.cached_limit_requests} left (All {self.key_manager.total_keys} keys exhausted)[/bold red]"
+            else:
+                self.daily_limits_text = (
+                    f"Requests: [bold green]{self.cached_remaining_requests}/{self.cached_limit_requests} left[/bold green] "
+                    f"({self.cached_used_requests} used){key_tag}"
+                )
         elif usage.get("limit_remaining") is not None:
             self.daily_limits_text = f"Credits: [bold green]${usage.get('limit_remaining'):.4f}[/bold green]"
         else:

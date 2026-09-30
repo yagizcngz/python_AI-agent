@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from textual.widgets import Button, Input, Label
-from ai_agent.ui.tui import AgentTUIApp, ModelSelectModal, FilePreviewModal, ConfirmQuitModal, KeysModal
+from ai_agent.ui.tui import AgentTUIApp, ModelSelectModal, FilePreviewModal, ConfirmQuitModal, KeysModal, LocalModelGuideModal
 
 def test_tui_small_mode_workspace_files():
     async def _run():
@@ -305,3 +305,181 @@ def test_tui_screen_fit_dimensions():
                 assert header.region.height == 1
                 assert not header.has_class("-tall")
     asyncio.run(_run())
+
+
+def test_model_select_modal_toggle_all_free():
+    async def _run():
+        app = AgentTUIApp()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app.action_switch_model()
+            await pilot.pause()
+            assert isinstance(app.screen, ModelSelectModal)
+
+            modal = app.screen
+            toggle_btn = modal.query_one("#btn-toggle-all-free", Button)
+            options = modal.query_one("#model-options")
+
+            assert toggle_btn.label == "All Free Models"
+            initial_count = options.option_count
+            assert initial_count >= 7
+
+            # Toggle to all free models
+            toggle_btn.press()
+            await pilot.pause()
+            assert toggle_btn.label == "Recommended"
+            assert options.option_count >= initial_count
+
+            # Toggle back to recommended
+            toggle_btn.press()
+            await pilot.pause()
+            assert toggle_btn.label == "All Free Models"
+            assert options.option_count == initial_count
+
+            # Close modal
+            close_btn = modal.query_one("#btn-close-model", Button)
+            close_btn.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, ModelSelectModal)
+
+    asyncio.run(_run())
+
+
+def test_model_select_modal_local_model_guard():
+    async def _run():
+        app = AgentTUIApp()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app.action_switch_model()
+            await pilot.pause()
+            assert isinstance(app.screen, ModelSelectModal)
+
+            # Custom input specifying an uninstalled local model
+            custom_input = app.screen.query_one("#custom-model-input", Input)
+            confirm_btn = app.screen.query_one("#btn-confirm-model", Button)
+
+            custom_input.value = "ollama/uninstalled-test-model:1b"
+            confirm_btn.press()
+            await pilot.pause()
+
+            # Because model is not installed, LocalModelGuideModal must be displayed
+            assert isinstance(app.screen, LocalModelGuideModal)
+            guide = app.screen
+            assert guide.model_name == "uninstalled-test-model:1b"
+
+            # Dismiss guide modal via back button
+            back_btn = guide.query_one("#btn-guide-back", Button)
+            back_btn.press()
+            await pilot.pause()
+
+            # Should return to ModelSelectModal
+            assert isinstance(app.screen, ModelSelectModal)
+            close_btn = app.screen.query_one("#btn-close-model", Button)
+            close_btn.press()
+            await pilot.pause()
+            assert not isinstance(app.screen, ModelSelectModal)
+
+    asyncio.run(_run())
+
+
+def test_model_select_modal_clicking_option_does_not_open_guide_until_select_pressed():
+    async def _run():
+        from textual.widgets import OptionList
+        app = AgentTUIApp()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app.action_switch_model()
+            await pilot.pause()
+            assert isinstance(app.screen, ModelSelectModal)
+
+            opt_list = app.screen.query_one("#model-options", OptionList)
+            # Find the uninstalled local model option index (llama3.2:1b)
+            target_idx = None
+            for idx in range(opt_list.option_count):
+                if "llama3.2:1b (Local Ollama)" in str(opt_list.get_option_at_index(idx).prompt):
+                    target_idx = idx
+                    break
+            assert target_idx is not None
+
+            # Simulate clicking / selecting the option in OptionList
+            opt_list.highlighted = target_idx
+            opt_list.action_select()
+            await pilot.pause()
+
+            # The guide modal MUST NOT appear yet; user is still on ModelSelectModal
+            assert isinstance(app.screen, ModelSelectModal)
+            assert opt_list.highlighted == target_idx
+
+            # Now press the "Select" button
+            confirm_btn = app.screen.query_one("#btn-confirm-model", Button)
+            confirm_btn.press()
+            await pilot.pause()
+
+            # Now the LocalModelGuideModal MUST appear because llama3.2:1b is not installed
+            assert isinstance(app.screen, LocalModelGuideModal)
+
+            # Close guide modal
+            back_btn = app.screen.query_one("#btn-guide-back", Button)
+            back_btn.press()
+            await pilot.pause()
+
+            assert isinstance(app.screen, ModelSelectModal)
+            app.screen.dismiss(None)
+
+    asyncio.run(_run())
+
+
+def test_model_select_modal_installed_local_model_switches_immediately():
+    async def _run():
+        from textual.widgets import OptionList
+        app = AgentTUIApp()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app.action_switch_model()
+            await pilot.pause()
+            assert isinstance(app.screen, ModelSelectModal)
+
+            opt_list = app.screen.query_one("#model-options", OptionList)
+            target_idx = None
+            for idx in range(opt_list.option_count):
+                if "qwen2.5-coder:1.5b (Local Ollama)" in str(opt_list.get_option_at_index(idx).prompt):
+                    target_idx = idx
+                    break
+            assert target_idx is not None
+
+            opt_list.highlighted = target_idx
+            confirm_btn = app.screen.query_one("#btn-confirm-model", Button)
+            confirm_btn.press()
+            await pilot.pause()
+
+            # Because qwen2.5-coder:1.5b is installed and ready, guide modal does NOT open;
+            assert not isinstance(app.screen, ModelSelectModal)
+            assert not isinstance(app.screen, LocalModelGuideModal)
+            assert app.model == "qwen2.5-coder:1.5b"
+            assert app.is_local is True
+            assert "Unlimited (Local)" in app.daily_limits_text
+            status = app.query_one("#status-bar", Label)
+            assert "Unlimited (Local)" in str(status.content)
+
+    asyncio.run(_run())
+
+
+def test_tui_local_model_unlimited_requests():
+    async def _run():
+        app = AgentTUIApp(model="qwen2.5-coder:1.5b", is_local=True)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            status = app.query_one("#status-bar", Label)
+            assert "Unlimited (Local)" in str(status.content)
+            assert "Unlimited (Local)" in app.daily_limits_text
+
+            # Switch back to cloud model
+            app.switch_to_model({"model": "test-cloud-model", "is_local": False})
+            await pilot.pause()
+            assert app.is_local is False
+            assert "Unlimited" not in app.daily_limits_text
+
+    asyncio.run(_run())
+
+
+

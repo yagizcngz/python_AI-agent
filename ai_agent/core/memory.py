@@ -29,7 +29,9 @@ def build_default_system_prompt() -> str:
         "4. Work iteratively: inspect files first, plan changes, apply them, and verify results.\n"
         "5. Do NOT use any emojis in your responses or outputs. Keep all text plain, clear, and professional.\n"
         "6. Your current working directory is already the project workspace root. All relative paths are evaluated directly inside this root. "
-        "If the user refers to the project root folder name in their instructions, operate directly within the workspace root—do NOT create a nested folder with the same name."
+        "If the user refers to the project root folder name in their instructions, operate directly within the workspace root—do NOT create a nested folder with the same name.\n"
+        "7. For conversational questions (such as greetings, introductions, general questions, or questions about yourself), reply directly in natural language plain text. Do NOT call tools or output tool JSON for conversational questions.\n"
+        "8. Only call tools when you genuinely need to inspect, modify, or execute files or commands in the workspace. Never invent or hallucinate tool names; only use: Read, Write, Edit, ListDir, Bash."
     )
 
 
@@ -65,17 +67,28 @@ class ConversationMemory:
         if content:
             msg["content"] = content
         if tool_calls:
-            msg["tool_calls"] = [
-                {
-                    "id": tc.id,
+            formatted_calls = []
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id", "")
+                    fn = tc.get("function", {})
+                    fn_name = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
+                    fn_args = fn.get("arguments", "") if isinstance(fn, dict) else getattr(fn, "arguments", "")
+                else:
+                    tc_id = getattr(tc, "id", "")
+                    fn = getattr(tc, "function", None)
+                    fn_name = getattr(fn, "name", "") if fn else ""
+                    fn_args = getattr(fn, "arguments", "") if fn else ""
+
+                formatted_calls.append({
+                    "id": tc_id,
                     "type": "function",
                     "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
+                        "name": fn_name,
+                        "arguments": fn_args,
                     },
-                }
-                for tc in tool_calls
-            ]
+                })
+            msg["tool_calls"] = formatted_calls
         self.messages.append(msg)
 
     def add_tool_result(self, tool_call_id: str, content: str) -> None:

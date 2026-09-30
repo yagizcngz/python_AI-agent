@@ -92,6 +92,7 @@ class RichAgentConsole:
         prompt_tokens: int,
         completion_tokens: int,
         account_usage: Optional[dict] = None,
+        is_local: bool = False,
     ) -> None:
         """Render a clean token telemetry table."""
         if self.quiet:
@@ -103,7 +104,9 @@ class RichAgentConsole:
         table.add_row("Completion Tokens", f"{completion_tokens:,}")
         table.add_row("Total Session Tokens", f"{(prompt_tokens + completion_tokens):,}")
 
-        if account_usage:
+        if is_local:
+            table.add_row("Requests", "Unlimited (Local)")
+        elif account_usage:
             daily = account_usage.get("free_model_daily_requests")
             if daily:
                 table.add_row(

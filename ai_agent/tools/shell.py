@@ -42,7 +42,7 @@ class BashTool(BaseTool):
     }
 
     def __init__(self, workspace_dir: Path, timeout: int = DEFAULT_SHELL_TIMEOUT):
-        self.workspace_dir = workspace_dir
+        self.workspace_dir = Path(workspace_dir).resolve()
         self.timeout = timeout
 
     def execute(self, **kwargs) -> str:

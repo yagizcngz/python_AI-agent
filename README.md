@@ -12,7 +12,7 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
 ## Key Features
 
 * **Autonomous Reasoning Loop:** Runs an iterative ReAct decision loop with configurable step limits (`--max-steps`), preventing infinite loops and runaway token consumption.
-* **Interactive Terminal UI (TUI):** A visual, keyboard-driven dashboard launched by default with live chat streams, syntax-highlighted tool cards, collapsible file tree explorer, model information, and token telemetry.
+* **Interactive Terminal UI (TUI):** A visual, keyboard-driven dashboard launched by default with live chat streams, syntax-highlighted tool cards, collapsible file tree explorer, dynamic model switcher, and real-time telemetry.
 * **Conversational REPL Mode:** Run with `--repl` to engage in multi-turn back-and-forth tasks in the terminal with persistent conversation context and helper commands (`/reset`, `/usage`, `/exit`).
 * **Native Tool Execution (Function Calling):**
   * `Read`: Safely reads files within the isolated application workspace.
@@ -20,11 +20,18 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
   * `Edit`: Fast in-place search-and-replace text editing without rewriting entire files.
   * `ListDir`: Native tree/directory inspection without spawning shell sub-processes.
   * `Bash`: Sandboxed terminal commands with strict timeout guards (`--timeout`) and dynamic Python runtime detection.
+* **Resilient Tool Parsing for Small & Local Models:**
+  * Intercepts and parses tool calls emitted as text by local models (Qwen XML `<function><name>...</name>`, `<tool_call>`, markdown code fences, and raw JSON).
+  * Automatically maps common tool aliases and hallucinations (e.g. `ListFilesCount`, `list_files`, `dir`, `read_file`, `shell`).
+  * Features relaxed argument decoding supporting YAML and unquoted JSON dictionary keys.
+  * Unpacks conversational responses disguised as JSON objects by small models to prevent repetitive JSON reply loops.
+* **Cloud + Local LLM Support:** Toggle smoothly between cloud models via OpenRouter or local zero-cost models via Ollama.
+* **Automated Multi-Key Rotation:** Supports pooling multiple OpenRouter API keys in `API_KEYS_OPEN_ROUTER.txt` with automatic failover rotation upon hitting daily request quotas or 429 rate limits.
+* **Hardware & Multi-Drive Awareness:** Built-in hardware scanner inspecting system RAM, GPU, and storage across all drives (including C: and secondary drives like D:) to evaluate model feasibility and prevent disk overflows.
+* **Unlimited Local Telemetry:** Top status bar dynamically reports `Requests: Unlimited (Local)` for offline models, bypassing cloud rate limit decrements and API polling.
 * **Strict Sandbox & Traversal Protection:** All file operations are validated against the workspace root using `pathlib.Path.resolve().is_relative_to(sandbox_root)`, strictly forbidding directory traversal escapes (`../`).
-* **Cloud + Local LLM Support:** Toggle between cloud models via OpenRouter or local zero-cost models on Ollama/LM Studio using `--local` or `--base-url`.
 * **Fault-Tolerant & Safe:**
   * Timeout protection on API calls (`--api-timeout`) and subprocess executions.
-  * Gracefully catches and repairs malformed JSON from small models.
   * Automatic UTF-8 stream reconfiguring to prevent Windows locale encoding errors.
   * Live model discovery (`--list-models`) and smart fallback suggestions when endpoints hit rate limits.
 
@@ -92,15 +99,25 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
    pip install -r requirements.txt
    ```
 
-3. **Configure your environment:**
-   Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` and insert your key:
-   ```env
-   OPENROUTER_API_KEY=sk-or-v1-your_key_here
-   ```
+3. **Configure your API Key(s):**
+   * **Option A (Fastest & Supports Multi-Key Rotation):**
+     Create or edit `API_KEYS_OPEN_ROUTER.txt` in the project root directory and paste your OpenRouter key(s), one per line:
+     ```text
+     sk-or-v1-your_primary_key_here
+     sk-or-v1-your_fallback_key_here
+     ```
+     *Automatic Failover:* When multiple keys are listed, the agent automatically rotates to the next available key whenever an account reaches its daily request limit or rate limit.
+   * **Option B (Environment Variable / .env):**
+     Copy `.env.example` to `.env`:
+     ```bash
+     cp .env.example .env
+     ```
+     And set:
+     ```env
+     OPENROUTER_API_KEY=sk-or-v1-your_key_here
+     ```
+   * **Option C (Local Offline Models - Zero Keys):**
+     Run local models via [Ollama](https://ollama.com/) with zero API keys. Just start Ollama and launch with `--local`.
 
 ---
 
@@ -152,14 +169,23 @@ python app/main.py -p "Inspect the workspace files and write a summary in summar
 ---
 
 ### 4. Running Local Offline Models (Ollama)
-Run models locally with zero API keys and zero cost:
+Run models locally with zero API keys, zero rate limits, and unlimited requests:
 ```powershell
-# 1. In another terminal, pull and start your local model in Ollama:
+# 1. Download and start your desired model in Ollama:
+ollama run llama3.2:3b
+# or
 ollama run qwen2.5-coder:1.5b
 
-# 2. Run the agent with the --local flag:
-python app/main.py --local -m "qwen2.5-coder:1.5b" -p "Write a hello world script"
+# 2. Launch the agent in TUI mode (press 'M' to switch models anytime):
+run.bat
+
+# Or run directly via CLI with --local:
+python app/main.py --local -m "llama3.2:3b" -p "Count the files in this workspace"
 ```
+
+* **Dynamic Installation Detection:** Opening the Model Switcher (`M` key in TUI) automatically scans your local Ollama instance. If a model is not yet installed, the TUI displays a step-by-step installation guide along with hardware RAM and multi-drive storage feasibility checks.
+* **Secondary Drive Storage Support:** You can store all model weights on a secondary drive (e.g. Drive `D:\ollama\models`) via an NTFS directory junction or the `OLLAMA_MODELS` environment variable to preserve primary SSD space.
+* **Unlimited Telemetry:** When running local models, the top status bar automatically displays `Requests: Unlimited (Local)` and bypasses cloud quota tracking.
 
 ---
 
@@ -191,9 +217,11 @@ pytest -v
 ```
 Tests cover:
 * Path sandboxing & directory traversal prevention (`tests/test_sandbox.py`)
-* Tool operations (`Read`, `Write`, `Edit`, `ListDir`, `Bash`, timeouts) (`tests/test_tools.py`)
-* ReAct reasoning loop, step limits, and mocked API responses (`tests/test_agent.py`)
-* Responsive TUI layout, modal screens, and small/tall terminal rendering (`tests/test_tui_layout.py`)
+* Tool operations (`Read`, `Write`, `Edit`, `ListDir`, `Bash`, timeouts, aliases, YAML arguments) (`tests/test_tools.py`)
+* ReAct reasoning loop, step limits, mocked API responses, and resilient local tool call fallback (`tests/test_agent.py`)
+* Multi-key rotation and 429 quota exhaustion recovery (`tests/test_keys.py`)
+* System hardware inspection, RAM/GPU sizing, and multi-drive storage checking (`tests/test_system_info.py`)
+* Responsive TUI layout, model switcher modal, local model switching, and unlimited telemetry verification (`tests/test_tui_layout.py`)
 
 ---
 

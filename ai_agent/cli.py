@@ -63,7 +63,8 @@ def run_interactive_repl(agent: Agent, rich_console: RichAgentConsole) -> None:
                 rich_console.print_usage_summary(
                     agent.memory.total_prompt_tokens,
                     agent.memory.total_completion_tokens,
-                    account_usage=fetch_account_usage(),
+                    account_usage=None if agent.is_local else fetch_account_usage(),
+                    is_local=agent.is_local,
                 )
                 continue
 
@@ -71,7 +72,8 @@ def run_interactive_repl(agent: Agent, rich_console: RichAgentConsole) -> None:
             rich_console.print_usage_summary(
                 agent.memory.total_prompt_tokens,
                 agent.memory.total_completion_tokens,
-                account_usage=fetch_account_usage(),
+                account_usage=None if agent.is_local else fetch_account_usage(),
+                is_local=agent.is_local,
             )
             print()
 
@@ -264,7 +266,8 @@ def main() -> None:
             rich_console.print_usage_summary(
                 agent.memory.total_prompt_tokens,
                 agent.memory.total_completion_tokens,
-                account_usage=fetch_account_usage(),
+                account_usage=None if agent.is_local else fetch_account_usage(),
+                is_local=agent.is_local,
             )
     else:
         # Interactive REPL mode

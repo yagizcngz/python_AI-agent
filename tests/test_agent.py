@@ -103,3 +103,76 @@ def test_agent_max_steps_guard(tmp_path: Path):
 
     result = agent.run("Do infinite work")
     assert "Limit reached: Agent reached maximum steps (3)" in result
+
+
+def test_extract_tool_or_answer_all_formats():
+    from ai_agent.core.agent import extract_tool_or_answer
+
+    available = {"Read", "Write", "Edit", "ListDir", "Bash"}
+
+    # 1. XML style function call
+    xml_text = '<function><name>ListDir</name><arguments>{"directory_path":"."}</arguments></function>'
+    kind, tool, args = extract_tool_or_answer(xml_text, available)
+    assert kind == "tool_call"
+    assert tool == "ListDir"
+
+    # 2. Aliased tool name from small model hallucination (ListFilesCount -> ListDir)
+    alias_text = '{"name": "ListFilesCount", "arguments": {"directory_path": "."}}'
+    kind, tool, args = extract_tool_or_answer(alias_text, available)
+    assert kind == "tool_call"
+    assert tool == "ListDir"
+
+    # 3. Disguised greeting JSON (Welcome)
+    welcome_text = '{"name": "Welcome", "arguments": []}'
+    kind, ans, _ = extract_tool_or_answer(welcome_text, available)
+    assert kind == "answer"
+    assert "AI assistant" in ans
+
+    # 4. Long conversational sentence disguised as tool name
+    sentence_text = '{"name": "My name is a large artificial intelligence. How can I help you today?"}'
+    kind, ans, _ = extract_tool_or_answer(sentence_text, available)
+    assert kind == "answer"
+    assert "My name is a large artificial intelligence" in ans
+
+    # 5. Code fence markdown tool call
+    fence_text = '```json\n{"name": "read_file", "arguments": {"file_path": "README.md"}}\n```'
+    kind, tool, args = extract_tool_or_answer(fence_text, available)
+    assert kind == "tool_call"
+    assert tool == "Read"
+
+
+def test_agent_fallback_tool_calling_loop(tmp_path: Path):
+    mock_client = MagicMock()
+
+    # Step 1: Model returns tool call in text content rather than tool_calls field
+    response_1 = MagicMock()
+    response_1.choices = [make_mock_choice(
+        content='{"name": "ListFilesCount", "arguments": {"directory_path": "."}}',
+        tool_calls=None,
+    )]
+    response_1.usage = MagicMock(prompt_tokens=20, completion_tokens=15)
+
+    # Step 2: Model returns final answer
+    response_2 = MagicMock()
+    response_2.choices = [make_mock_choice(
+        content="There are 0 files in this directory.",
+        tool_calls=None,
+    )]
+    response_2.usage = MagicMock(prompt_tokens=30, completion_tokens=10)
+
+    mock_client.chat.completions.create.side_effect = [response_1, response_2]
+
+    from ai_agent.tools.filesystem import ListDirTool
+    tools = ToolRegistry([ListDirTool(tmp_path)])
+    agent = Agent(client=mock_client, model="local-small-model", tools=tools)
+
+    events = []
+    agent.event_handler = lambda e: events.append(e)
+
+    result = agent.run("can you count the files under this folder ?")
+    assert result == "There are 0 files in this directory."
+
+    tool_call_events = [e for e in events if e.event_type == AgentEventType.TOOL_CALL]
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0].data["name"] == "ListDir"
+

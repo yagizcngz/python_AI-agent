@@ -46,7 +46,7 @@ class ReadTool(BaseTool):
     }
 
     def __init__(self, workspace_dir: Path):
-        self.workspace_dir = workspace_dir
+        self.workspace_dir = Path(workspace_dir).resolve()
 
     def execute(self, **kwargs) -> str:
         file_path = kwargs.get("file_path") or kwargs.get("path") or kwargs.get("filename")
@@ -90,7 +90,7 @@ class WriteTool(BaseTool):
     }
 
     def __init__(self, workspace_dir: Path):
-        self.workspace_dir = workspace_dir
+        self.workspace_dir = Path(workspace_dir).resolve()
 
     def execute(self, **kwargs) -> str:
         file_path = kwargs.get("file_path") or kwargs.get("path") or kwargs.get("filename")
@@ -143,7 +143,7 @@ class EditTool(BaseTool):
     }
 
     def __init__(self, workspace_dir: Path):
-        self.workspace_dir = workspace_dir
+        self.workspace_dir = Path(workspace_dir).resolve()
 
     def execute(self, **kwargs) -> str:
         file_path = kwargs.get("file_path") or kwargs.get("path") or kwargs.get("filename")
@@ -215,7 +215,7 @@ class ListDirTool(BaseTool):
     IGNORE_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", ".idea", ".vscode"}
 
     def __init__(self, workspace_dir: Path):
-        self.workspace_dir = workspace_dir
+        self.workspace_dir = Path(workspace_dir).resolve()
 
     def execute(self, **kwargs) -> str:
         dir_path = kwargs.get("directory_path", ".") or "."
