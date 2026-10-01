@@ -155,30 +155,53 @@ def evaluate_specs_for_model(model_name: str) -> Dict[str, any]:
     }
 
 
+_OLLAMA_CACHE_TS: float = 0.0
+_OLLAMA_CACHE_DATA: List[str] = []
+_OLLAMA_CACHE_TTL: float = 30.0  # 30 seconds cache
+
+
 def check_local_model_installed(
     model_name: str,
     base_url: str = "http://localhost:11434",
     timeout: float = 1.5,
+    force_refresh: bool = False,
 ) -> Tuple[bool, str, List[str]]:
     """
     Check whether Ollama is active and whether the target model is installed.
+    Uses a 30s in-memory cache to prevent socket delays when rendering UI dialogs.
     Returns: (is_installed, reason_code, list_of_installed_models)
     reason_code can be: 'ready', 'ollama_offline', or 'model_missing'
     """
-    endpoint = f"{base_url.rstrip('/')}/api/tags"
-    try:
-        req = urllib.request.Request(endpoint, headers={"User-Agent": "python-ai-agent"})
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            data = json.loads(res.read().decode("utf-8"))
-            installed_models = [m.get("name", "") for m in data.get("models", [])]
+    global _OLLAMA_CACHE_TS, _OLLAMA_CACHE_DATA
+    import time
 
-            # Normalize model comparison (e.g. 'qwen2.5-coder:1.5b' matches 'qwen2.5-coder:1.5b:latest')
-            target = model_name.lower().strip()
-            for inst in installed_models:
-                inst_lower = inst.lower()
-                if target == inst_lower or f"{target}:latest" == inst_lower or target == inst_lower.split(":")[0]:
-                    return True, "ready", installed_models
+    now = time.time()
+    installed_models = []
 
-            return False, "model_missing", installed_models
-    except Exception:
-        return False, "ollama_offline", []
+    if not force_refresh and (now - _OLLAMA_CACHE_TS) < _OLLAMA_CACHE_TTL and _OLLAMA_CACHE_DATA:
+        installed_models = _OLLAMA_CACHE_DATA
+    else:
+        endpoint = f"{base_url.rstrip('/')}/api/tags"
+        try:
+            req = urllib.request.Request(endpoint, headers={"User-Agent": "python-ai-agent"})
+            with urllib.request.urlopen(req, timeout=timeout) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                installed_models = [m.get("name", "") for m in data.get("models", [])]
+                _OLLAMA_CACHE_DATA = installed_models
+                _OLLAMA_CACHE_TS = now
+        except Exception:
+            if not _OLLAMA_CACHE_DATA:
+                return False, "ollama_offline", []
+            installed_models = _OLLAMA_CACHE_DATA
+
+    target = model_name.lower().strip()
+    if not target:
+        return True if installed_models else False, "ready" if installed_models else "model_missing", installed_models
+
+    # Normalize model comparison (e.g. 'qwen2.5-coder:1.5b' matches 'qwen2.5-coder:1.5b:latest')
+    for inst in installed_models:
+        inst_lower = inst.lower()
+        if target == inst_lower or f"{target}:latest" == inst_lower or target == inst_lower.split(":")[0]:
+            return True, "ready", installed_models
+
+    return False, "model_missing", installed_models

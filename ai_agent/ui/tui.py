@@ -38,11 +38,20 @@ from textual.widgets import (
 from ..config import (
     DEFAULT_LOCAL_BASE_URL,
     DEFAULT_MODEL,
+    POPULAR_LOCAL_MODELS,
     RECOMMENDED_FREE_MODELS,
     WORKSPACE_DIR,
+    get_provider_description,
+    is_openrouter_url,
 )
 from ..core.agent import Agent, AgentEvent, AgentEventType
-from ..core.client import create_client, fetch_account_usage, get_all_free_models, validate_model_id
+from ..core.client import (
+    create_client,
+    fetch_account_usage,
+    get_all_free_models,
+    get_recommended_free_models,
+    validate_model_id,
+)
 from ..core.keys import KeyManager
 from ..core.memory import ConversationMemory
 from ..core.system_info import check_local_model_installed, evaluate_specs_for_model
@@ -208,7 +217,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
     #model-header {
         height: 1;
         layout: horizontal;
-        margin-top: 1;
+        margin-top: 0;
         margin-bottom: 0;
     }
 
@@ -236,15 +245,43 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
         border: none;
     }
 
+    #model-filter-bar {
+        height: 1;
+        layout: horizontal;
+        margin-top: 0;
+        margin-bottom: 0;
+    }
+
+    .filter-tab {
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0 1;
+        margin-right: 1;
+        background: #1e293b;
+        color: #94a3b8;
+        text-style: bold;
+    }
+
+    .filter-tab:hover, .filter-tab:focus {
+        background: #334155;
+        color: #f8fafc;
+    }
+
+    .filter-tab-active {
+        background: #0284c7;
+        color: #ffffff;
+    }
+
     #model-options {
-        height: 7;
+        height: 4;
         border: solid #334155;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #custom-model-input {
         height: 3;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #model-error-msg {
@@ -258,7 +295,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
         layout: horizontal;
         align: right middle;
         margin-top: 0;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     .modal-btn {
@@ -280,33 +317,73 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, current_model: str, **kwargs):
+    def __init__(self, current_model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(**kwargs)
         self.current_model = current_model
-        self.showing_all_free = False
+        self.base_url = base_url
+        self.active_tab = "recommended"
+        self._cached_tab_options: dict[str, List[str]] = {}
+
+    def _get_options_for_tab(self, tab: str) -> List[str]:
+        if tab in self._cached_tab_options:
+            return self._cached_tab_options[tab]
+
+        options: List[str] = []
+        if tab == "recommended":
+            # Curated top 4-5 cloud models with verified tool support
+            rec_models = get_recommended_free_models()
+            for m in rec_models:
+                badge = "(Active)" if m == self.current_model else "(Free)"
+                options.append(f"{m} {badge}")
+            # Curated top local models
+            options.append("qwen2.5-coder:1.5b (Local Ollama)")
+            options.append("llama3.2:1b (Local Ollama)")
+            options.append("qwen2.5-coder:7b (Local Ollama)")
+        elif tab == "cloud_free":
+            # All available free cloud models on OpenRouter
+            free_models = get_all_free_models()
+            for m in free_models:
+                badge = "(Active)" if m == self.current_model else "(Free)"
+                options.append(f"{m} {badge}")
+        elif tab == "local":
+            # 1. Fetch currently installed models from local Ollama server
+            _, _, installed = check_local_model_installed("", timeout=0.6)
+            installed_lower = set()
+            for inst in installed:
+                base_name = inst.split(":")[0].lower()
+                installed_lower.add(base_name)
+                installed_lower.add(inst.lower())
+                badge = "(Active, Local)" if inst == self.current_model else "(Local Ollama - Installed)"
+                options.append(f"{inst} {badge}")
+
+            # 2. Append popular downloadable local models not already installed
+            for pop in POPULAR_LOCAL_MODELS:
+                pop_base = pop.split(":")[0].lower()
+                if pop.lower() not in installed_lower and pop_base not in installed_lower:
+                    badge = "(Active, Local)" if pop == self.current_model else "(Local Ollama)"
+                    options.append(f"{pop} {badge}")
+
+        self._cached_tab_options[tab] = options
+        return options
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-dialog"):
             with Horizontal(id="model-header"):
                 yield Label("Select Active AI Model", id="model-dialog-title")
                 yield Button("X", variant="error", id="btn-close-model")
-            yield Label("Choose a recommended model or type a custom model ID below:")
 
-            options = []
-            for m in RECOMMENDED_FREE_MODELS:
-                badge = "(Active)" if m == self.current_model else "(Free)"
-                options.append(f"{m} {badge}")
-            options.append("qwen2.5-coder:1.5b (Local Ollama)")
-            options.append("llama3.2:1b (Local Ollama)")
+            with Horizontal(id="model-filter-bar"):
+                yield Button("Recommended", id="filter-rec", classes="filter-tab filter-tab-active")
+                yield Button("All Cloud Free", id="filter-cloud", classes="filter-tab")
+                yield Button("Local Ollama", id="filter-local", classes="filter-tab")
 
-            yield OptionList(*options, id="model-options")
+            yield OptionList(*self._get_options_for_tab("recommended"), id="model-options")
             yield Input(
                 placeholder="Or type custom model (e.g. openai/gpt-4o, deepseek/deepseek-chat)...",
                 id="custom-model-input",
             )
             yield Label("", id="model-error-msg")
             with Horizontal(id="model-btn-bar"):
-                yield Button("All Free Models", variant="default", id="btn-toggle-all-free", classes="modal-btn")
                 yield Button("Select", variant="primary", id="btn-confirm-model", classes="modal-btn")
                 yield Button("Cancel", variant="default", id="btn-cancel-model", classes="modal-btn")
 
@@ -330,35 +407,33 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
         except Exception:
             pass
 
-    def toggle_free_models(self) -> None:
-        """Toggle between recommended models and full catalog of free OpenRouter models."""
-        opt_list = self.query_one("#model-options", OptionList)
-        btn = self.query_one("#btn-toggle-all-free", Button)
-        opt_list.clear_options()
+    def set_filter(self, tab: str) -> None:
+        self.active_tab = tab
+        for t_id in ("filter-rec", "filter-cloud", "filter-local"):
+            try:
+                self.query_one(f"#{t_id}", Button).remove_class("filter-tab-active")
+            except Exception:
+                pass
+        target = "filter-rec" if tab == "recommended" else ("filter-cloud" if tab == "cloud_free" else "filter-local")
+        try:
+            self.query_one(f"#{target}", Button).add_class("filter-tab-active")
+        except Exception:
+            pass
 
-        if not self.showing_all_free:
-            self.showing_all_free = True
-            btn.label = "Recommended"
-            free_models = get_all_free_models()
-            for m in free_models:
-                badge = "(Active)" if m == self.current_model else "(Free)"
-                opt_list.add_option(f"{m} {badge}")
-            opt_list.add_option("qwen2.5-coder:1.5b (Local Ollama)")
-            opt_list.add_option("llama3.2:1b (Local Ollama)")
-        else:
-            self.showing_all_free = False
-            btn.label = "All Free Models"
-            for m in RECOMMENDED_FREE_MODELS:
-                badge = "(Active)" if m == self.current_model else "(Free)"
-                opt_list.add_option(f"{m} {badge}")
-            opt_list.add_option("qwen2.5-coder:1.5b (Local Ollama)")
-            opt_list.add_option("llama3.2:1b (Local Ollama)")
+        opt_list = self.query_one("#model-options", OptionList)
+        opt_list.clear_options()
+        for opt in self._get_options_for_tab(tab):
+            opt_list.add_option(opt)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-confirm-model":
             self.confirm_selection()
-        elif event.button.id == "btn-toggle-all-free":
-            self.toggle_free_models()
+        elif event.button.id == "filter-rec":
+            self.set_filter("recommended")
+        elif event.button.id == "filter-cloud":
+            self.set_filter("cloud_free")
+        elif event.button.id == "filter-local":
+            self.set_filter("local")
         elif event.button.id in ("btn-cancel-model", "btn-close-model"):
             self.dismiss(None)
 
@@ -381,7 +456,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
             is_local = custom_val.startswith("ollama/")
             model_name = custom_val[7:] if is_local else custom_val
 
-            is_valid, resolved = validate_model_id(model_name, is_local=is_local)
+            is_valid, resolved = validate_model_id(model_name, is_local=is_local, base_url=self.base_url)
             if not is_valid:
                 err_label.update(f"[bold red]{resolved}[/bold red]")
                 err_label.display = True
@@ -398,7 +473,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
             res = {
                 "model": resolved,
                 "is_local": is_local,
-                "base_url": DEFAULT_LOCAL_BASE_URL if is_local else None,
+                "base_url": DEFAULT_LOCAL_BASE_URL if is_local else self.base_url,
             }
             self.dismiss(res)
             return
@@ -408,7 +483,7 @@ class ModelSelectModal(ModalScreen[Optional[dict]]):
             err_label.display = False
             prompt_opt = str(opt_list.get_option_at_index(opt_list.highlighted).prompt)
             model_id = prompt_opt.split(" ")[0]
-            if "(Local Ollama)" in prompt_opt:
+            if "(Local Ollama" in prompt_opt:
                 is_installed, reason, _ = check_local_model_installed(model_id)
                 if not is_installed:
                     spec_eval = evaluate_specs_for_model(model_id)
@@ -1062,14 +1137,19 @@ class AgentTUIApp(App):
 
         self.current_step = 0
         self.current_status = "IDLE"
-        self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]" if self.is_local else "Requests: Loading..."
+        if self.is_local:
+            self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+        elif not is_openrouter_url(self.base_url):
+            self.daily_limits_text = f"Provider: [bold green]{get_provider_description(self.base_url)}[/bold green]"
+        else:
+            self.daily_limits_text = "Requests: Loading..."
         self.cached_remaining_requests: Optional[int] = None
         self.cached_limit_requests: Optional[int] = None
         self.cached_used_requests: Optional[int] = None
         self.current_view_mode = "files"
         self.is_chat_expanded = False
 
-        self.key_manager = KeyManager()
+        self.key_manager = KeyManager(base_url=self.base_url)
         if not self.api_key:
             self.api_key = self.key_manager.get_current_key()
 
@@ -1232,7 +1312,7 @@ class AgentTUIApp(App):
 
         self.populate_file_tree()
         self.update_telemetry()
-        if not self.is_local:
+        if not self.is_local and is_openrouter_url(self.base_url):
             self.refresh_account_limits()
 
         # In small terminal mode, start in files mode so files are 100% visible
@@ -1318,7 +1398,7 @@ class AgentTUIApp(App):
             if res:
                 self.switch_to_model(res)
 
-        self.push_screen(ModelSelectModal(current_model=self.model), on_model_chosen)
+        self.push_screen(ModelSelectModal(current_model=self.model, base_url=self.base_url), on_model_chosen)
 
     def switch_to_model(self, model_config: dict) -> None:
         """Switch active model and client configuration."""
@@ -1331,6 +1411,11 @@ class AgentTUIApp(App):
         self.base_url = base_url
 
         try:
+            if not self.is_local:
+                self.key_manager = KeyManager(base_url=self.base_url)
+                self.api_key = self.key_manager.get_current_key()
+                self.agent.key_manager = self.key_manager
+
             self.client = create_client(
                 api_key=self.api_key,
                 base_url=self.base_url,
@@ -1343,13 +1428,16 @@ class AgentTUIApp(App):
 
             if self.is_local:
                 self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+            elif not is_openrouter_url(self.base_url):
+                self.daily_limits_text = f"Provider: [bold green]{get_provider_description(self.base_url)}[/bold green]"
             else:
                 self.daily_limits_text = "Requests: Loading..."
                 self.refresh_account_limits()
 
             self.update_telemetry()
 
-            mode_desc = "Local Ollama" if self.is_local else "OpenRouter"
+            mode_desc = "Local Ollama" if self.is_local else get_provider_description(self.base_url)
+
             chat_log = self.query_one("#chat-log", RichLog)
             chat_log.write(
                 Panel(
@@ -1520,6 +1608,8 @@ class AgentTUIApp(App):
 
         if self.is_local:
             self.daily_limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+        elif not is_openrouter_url(self.base_url):
+            self.daily_limits_text = f"Provider: [bold green]{get_provider_description(self.base_url)}[/bold green]"
         else:
             # Optimistically decrement remaining requests count immediately
             if self.cached_remaining_requests is not None and self.cached_remaining_requests > 0:
@@ -1546,7 +1636,13 @@ class AgentTUIApp(App):
                 st_color = "green"
 
             tokens_str = f"{self.memory.total_prompt_tokens:,} in | {self.memory.total_completion_tokens:,} out"
-            limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]" if self.is_local else self.daily_limits_text
+            if self.is_local:
+                limits_text = "Requests: [bold green]Unlimited (Local)[/bold green]"
+            elif not is_openrouter_url(self.base_url):
+                limits_text = f"Provider: [bold green]{get_provider_description(self.base_url)}[/bold green]"
+            else:
+                limits_text = self.daily_limits_text
+
             bar_text = (
                 f"Status: [bold {st_color}]{status}[/bold {st_color}] | "
                 f"Model: [bold cyan]{self.model}[/bold cyan] | "
@@ -1566,10 +1662,15 @@ class AgentTUIApp(App):
             self.call_from_thread(self.update_telemetry)
             return
 
+        if not is_openrouter_url(self.base_url):
+            self.daily_limits_text = f"Provider: [bold green]{get_provider_description(self.base_url)}[/bold green]"
+            self.call_from_thread(self.update_telemetry)
+            return
+
         import time
         if delay > 0:
             time.sleep(delay)
-        usage = fetch_account_usage(self.api_key)
+        usage = fetch_account_usage(self.api_key, base_url=self.base_url)
         if not usage:
             return
         daily = usage.get("free_model_daily_requests")
@@ -1586,7 +1687,7 @@ class AgentTUIApp(App):
                     self.client = create_client(api_key=new_key, base_url=self.base_url, is_local=self.is_local)
                     self.agent.client = self.client
                     self.notify(f"API key quota reached. Auto-switched to key {self.key_manager.current_index + 1}/{self.key_manager.total_keys}.", severity="warning")
-                    new_usage = fetch_account_usage(new_key)
+                    new_usage = fetch_account_usage(new_key, base_url=self.base_url)
                     if new_usage and new_usage.get("free_model_daily_requests"):
                         new_daily = new_usage["free_model_daily_requests"]
                         self.cached_remaining_requests = new_daily.get("remaining", 0)

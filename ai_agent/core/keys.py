@@ -37,8 +37,15 @@ class KeyManager:
     Loads keys from API_KEYS_OPEN_ROUTER.txt and active environment variables.
     """
 
-    def __init__(self, key_file: Optional[Path] = None, keys: Optional[List[str]] = None):
-        self.key_file = key_file or (PROJECT_ROOT / "API_KEYS_OPEN_ROUTER.txt")
+    def __init__(
+        self,
+        key_file: Optional[Path] = None,
+        keys: Optional[List[str]] = None,
+        base_url: Optional[str] = None,
+    ):
+        self.base_url = base_url
+        self.key_file = key_file
+        self.source_label = key_file.name if key_file else "API_KEYS_OPEN_ROUTER.txt"
         if keys is not None:
             self.keys: List[str] = list(keys)
         else:
@@ -46,16 +53,48 @@ class KeyManager:
         self.current_index: int = 0
         self.exhausted_keys: set[str] = set()
 
+    def _determine_search_paths(self) -> List[Path]:
+        """Determine key file search paths based on configured endpoint."""
+        if self.key_file:
+            return [self.key_file]
+
+        files: List[Path] = []
+        url = (self.base_url or os.getenv("OPENROUTER_BASE_URL", "")).lower()
+
+        if "generativelanguage.googleapis.com" in url or "google" in url:
+            files.extend([
+                PROJECT_ROOT / "API_KEYS_GEMINI.txt",
+                PROJECT_ROOT / "app" / "API_KEYS_GEMINI.txt",
+            ])
+            self.source_label = "API_KEYS_GEMINI.txt"
+        elif "api.groq.com" in url or "groq" in url:
+            files.extend([
+                PROJECT_ROOT / "API_KEYS_GROQ.txt",
+                PROJECT_ROOT / "app" / "API_KEYS_GROQ.txt",
+            ])
+            self.source_label = "API_KEYS_GROQ.txt"
+        elif "api.deepseek.com" in url or "deepseek" in url:
+            files.extend([
+                PROJECT_ROOT / "API_KEYS_DEEPSEEK.txt",
+                PROJECT_ROOT / "app" / "API_KEYS_DEEPSEEK.txt",
+            ])
+            self.source_label = "API_KEYS_DEEPSEEK.txt"
+
+        # General fallbacks
+        files.extend([
+            PROJECT_ROOT / "API_KEYS.txt",
+            PROJECT_ROOT / "app" / "API_KEYS.txt",
+            PROJECT_ROOT / "API_KEYS_OPEN_ROUTER.txt",
+            PROJECT_ROOT / "app" / "API_KEYS_OPEN_ROUTER.txt",
+        ])
+        return files
+
     def _load_keys(self) -> List[str]:
-        """Load unique, non-empty keys from file and environment."""
+        """Load unique, non-empty keys from files and environment."""
         keys: List[str] = []
 
-        search_paths = [
-            self.key_file,
-            PROJECT_ROOT / "app" / "API_KEYS_OPEN_ROUTER.txt",
-        ]
+        search_paths = self._determine_search_paths()
 
-        # Prioritize keys found in API_KEYS_OPEN_ROUTER.txt
         for path in search_paths:
             if path and path.is_file():
                 try:
@@ -67,10 +106,20 @@ class KeyManager:
                 except Exception:
                     pass
 
-        # Also append current env key if set and not already present
-        env_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-        if env_key and env_key not in keys and not env_key.startswith("ollama"):
-            keys.insert(0, env_key)
+        # Also append current env key if set and not already present (only when not loading explicit key_file)
+        if not self.key_file:
+            url = (self.base_url or os.getenv("OPENROUTER_BASE_URL", "")).lower()
+            if "generativelanguage.googleapis.com" in url or "google" in url:
+                env_key = os.getenv("GEMINI_API_KEY", "").strip()
+            elif "api.groq.com" in url or "groq" in url:
+                env_key = os.getenv("GROQ_API_KEY", "").strip()
+            elif "api.deepseek.com" in url or "deepseek" in url:
+                env_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            else:
+                env_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+
+            if env_key and env_key not in keys and not env_key.startswith("ollama"):
+                keys.insert(0, env_key)
 
         return keys
 
@@ -99,7 +148,7 @@ class KeyManager:
             return (
                 False,
                 "",
-                "No API keys found in API_KEYS_OPEN_ROUTER.txt or environment variables.",
+                f"No API keys found in {self.source_label} or environment variables.",
             )
 
         current = self.get_current_key()
@@ -113,13 +162,22 @@ class KeyManager:
             if candidate not in self.exhausted_keys:
                 self.current_index = next_idx
                 os.environ["OPENROUTER_API_KEY"] = candidate
+                url = (self.base_url or os.getenv("OPENROUTER_BASE_URL", "")).lower()
+                if "generativelanguage.googleapis.com" in url or "google" in url:
+                    os.environ["GEMINI_API_KEY"] = candidate
+                elif "api.groq.com" in url or "groq" in url:
+                    os.environ["GROQ_API_KEY"] = candidate
+                elif "api.deepseek.com" in url or "deepseek" in url:
+                    os.environ["DEEPSEEK_API_KEY"] = candidate
+
                 masked = f"{candidate[:8]}...{candidate[-4:]}" if len(candidate) > 12 else "key"
                 msg = f"Switched to API key {self.current_index + 1} of {len(self.keys)} ({masked})."
                 return True, candidate, msg
 
         # All keys in the file have been exhausted
+        label = "API_KEYS_OPEN_ROUTER.txt" if self.source_label.endswith("keys.txt") else self.source_label
         return (
             False,
             "",
-            f"All {len(self.keys)} API keys in API_KEYS_OPEN_ROUTER.txt have exhausted their usage limit.",
+            f"All {len(self.keys)} API keys in {label} have exhausted their usage limit.",
         )

@@ -25,9 +25,11 @@ from .config import (
     DEFAULT_MODEL,
     DEFAULT_SHELL_TIMEOUT,
     WORKSPACE_DIR,
+    is_openrouter_url,
 )
 from .core.agent import Agent
 from .core.client import create_client, fetch_account_usage, fetch_models
+from .core.keys import KeyManager
 from .core.memory import ConversationMemory
 from .tools.base import ToolRegistry
 from .tools.filesystem import EditTool, ListDirTool, ReadTool, WriteTool
@@ -60,20 +62,24 @@ def run_interactive_repl(agent: Agent, rich_console: RichAgentConsole) -> None:
                 continue
 
             if prompt.lower() in ("/usage", "usage"):
+                is_custom = not agent.is_local and not is_openrouter_url(agent.base_url)
                 rich_console.print_usage_summary(
                     agent.memory.total_prompt_tokens,
                     agent.memory.total_completion_tokens,
-                    account_usage=None if agent.is_local else fetch_account_usage(),
+                    account_usage=None if (agent.is_local or is_custom) else fetch_account_usage(base_url=agent.base_url),
                     is_local=agent.is_local,
+                    is_custom_api=is_custom,
                 )
                 continue
 
             agent.run(prompt)
+            is_custom = not agent.is_local and not is_openrouter_url(agent.base_url)
             rich_console.print_usage_summary(
                 agent.memory.total_prompt_tokens,
                 agent.memory.total_completion_tokens,
-                account_usage=None if agent.is_local else fetch_account_usage(),
+                account_usage=None if (agent.is_local or is_custom) else fetch_account_usage(base_url=agent.base_url),
                 is_local=agent.is_local,
+                is_custom_api=is_custom,
             )
             print()
 
@@ -156,7 +162,10 @@ def main() -> None:
 
     # Handle usage query
     if args.usage:
-        usage = fetch_account_usage()
+        if not is_openrouter_url(args.base_url):
+            print("Account usage endpoint is only available for OpenRouter.", file=sys.stderr)
+            sys.exit(1)
+        usage = fetch_account_usage(base_url=args.base_url)
         if not usage:
             print("Unable to fetch account usage. Ensure OPENROUTER_API_KEY is configured.", file=sys.stderr)
             sys.exit(1)
@@ -248,6 +257,7 @@ def main() -> None:
     ])
 
     rich_console = RichAgentConsole(quiet=args.quiet)
+    key_manager = None if args.local else KeyManager(base_url=base_url)
 
     agent = Agent(
         client=client,
@@ -255,6 +265,9 @@ def main() -> None:
         tools=tools,
         max_steps=args.max_steps,
         event_handler=rich_console.handle_event,
+        key_manager=key_manager,
+        is_local=args.local,
+        base_url=base_url,
     )
 
     if args.prompt:
@@ -263,11 +276,13 @@ def main() -> None:
         if args.quiet:
             print(answer)
         else:
+            is_custom = not agent.is_local and not is_openrouter_url(agent.base_url)
             rich_console.print_usage_summary(
                 agent.memory.total_prompt_tokens,
                 agent.memory.total_completion_tokens,
-                account_usage=None if agent.is_local else fetch_account_usage(),
+                account_usage=None if (agent.is_local or is_custom) else fetch_account_usage(base_url=agent.base_url),
                 is_local=agent.is_local,
+                is_custom_api=is_custom,
             )
     else:
         # Interactive REPL mode

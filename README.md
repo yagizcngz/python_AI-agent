@@ -25,10 +25,11 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
   * Automatically maps common tool aliases and hallucinations (e.g. `ListFilesCount`, `list_files`, `dir`, `read_file`, `shell`).
   * Features relaxed argument decoding supporting YAML and unquoted JSON dictionary keys.
   * Unpacks conversational responses disguised as JSON objects by small models to prevent repetitive JSON reply loops.
-* **Cloud + Local LLM Support:** Toggle smoothly between cloud models via OpenRouter or local zero-cost models via Ollama.
-* **Automated Multi-Key Rotation:** Supports pooling multiple OpenRouter API keys in `API_KEYS_OPEN_ROUTER.txt` with automatic failover rotation upon hitting daily request quotas or 429 rate limits.
+* **Cloud + Local LLM Support:** Toggle smoothly between cloud models via OpenRouter, alternative providers (Gemini, Groq, DeepSeek), or local zero-cost models via Ollama.
+* **Persistent Local Model Caching & Instant Tab Switching:** Fast disk cache (`.cache/openrouter_models_cache.json`, 24h TTL) and in-memory pre-caching eliminates UI latency, switching categories in under 1ms.
+* **Automated Multi-Key Rotation Across Providers:** Supports pooling multiple API keys in `API_KEYS_OPEN_ROUTER.txt`, `API_KEYS_GEMINI.txt`, `API_KEYS_GROQ.txt`, or `API_KEYS_DEEPSEEK.txt` with automatic in-flight rotation upon hitting 429 rate limits or daily quotas without losing conversation context.
 * **Hardware & Multi-Drive Awareness:** Built-in hardware scanner inspecting system RAM, GPU, and storage across all drives (including C: and secondary drives like D:) to evaluate model feasibility and prevent disk overflows.
-* **Unlimited Local Telemetry:** Top status bar dynamically reports `Requests: Unlimited (Local)` for offline models, bypassing cloud rate limit decrements and API polling.
+* **Provider-Aware Quota Telemetry:** Top status bar dynamically reports `Requests: Unlimited (Local)` for offline models, provider limits (`Gemini Free (1,500 RPD / 15 RPM)`, `Groq Free (30 RPM)`), or live OpenRouter request balances (`18/50 left`).
 * **Strict Sandbox & Traversal Protection:** All file operations are validated against the workspace root using `pathlib.Path.resolve().is_relative_to(sandbox_root)`, strictly forbidding directory traversal escapes (`../`).
 * **Fault-Tolerant & Safe:**
   * Timeout protection on API calls (`--api-timeout`) and subprocess executions.
@@ -99,24 +100,40 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
    pip install -r requirements.txt
    ```
 
-3. **Configure your API Key(s):**
-   * **Option A (Fastest & Supports Multi-Key Rotation):**
+3. **Configure your API Key(s) & Provider:**
+   * **Option A (Default Base: OpenRouter with Multi-Key Rotation):**
      Create or edit `API_KEYS_OPEN_ROUTER.txt` in the project root directory and paste your OpenRouter key(s), one per line:
      ```text
      sk-or-v1-your_primary_key_here
      sk-or-v1-your_fallback_key_here
      ```
-     *Automatic Failover:* When multiple keys are listed, the agent automatically rotates to the next available key whenever an account reaches its daily request limit or rate limit.
-   * **Option B (Environment Variable / .env):**
-     Copy `.env.example` to `.env`:
-     ```bash
-     cp .env.example .env
-     ```
-     And set:
+     *Automatic Failover:* When multiple keys are listed, the agent automatically rotates to the next available key whenever an account reaches its daily request limit (50 requests/day on free accounts) or hits 429 rate limits.
+     Alternatively, configure via `.env`:
      ```env
      OPENROUTER_API_KEY=sk-or-v1-your_key_here
      ```
-   * **Option C (Local Offline Models - Zero Keys):**
+   * **Option B (Alternative Providers: Google AI Studio, Groq, DeepSeek, OpenAI):**
+     The agent supports any OpenAI-compatible API endpoint. Simply configure `.env`:
+     * **Google AI Studio (Gemini):**
+       ```env
+       OPENROUTER_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+       OPENROUTER_API_KEY=AIzaSy...your_gemini_key
+       OPENROUTER_MODEL=gemini-1.5-flash
+       ```
+     * **Groq:**
+       ```env
+       OPENROUTER_BASE_URL=https://api.groq.com/openai/v1
+       OPENROUTER_API_KEY=gsk_...your_groq_key
+       OPENROUTER_MODEL=llama-3.3-70b-versatile
+       ```
+     * **DeepSeek Direct:**
+       ```env
+       OPENROUTER_BASE_URL=https://api.deepseek.com/v1
+       OPENROUTER_API_KEY=sk-...your_deepseek_key
+       OPENROUTER_MODEL=deepseek-chat
+       ```
+     *Automatic Multi-Key Failover:* You can store multiple keys for any provider in dedicated files (`API_KEYS_GEMINI.txt`, `API_KEYS_GROQ.txt`, `API_KEYS_DEEPSEEK.txt`, or generic `API_KEYS.txt`). When a key hits its per-minute or daily quota, the agent auto-rotates to the next key and resumes execution seamlessly.
+   * **Option C (Local Offline Models - Zero Keys, Unlimited):**
      Run local models via [Ollama](https://ollama.com/) with zero API keys. Just start Ollama and launch with `--local`.
 
 ---
@@ -135,7 +152,7 @@ python app/main.py
   * **Split (Alt+3):** Display both tool activity and workspace files in stacked split view.
   * **Chat (Alt+C):** Toggle full-width chat focus or restore side-by-side workspace split.
   * **Refresh (Alt+R):** Refresh the workspace file tree.
-  * **Model (Alt+M):** Open the interactive Model Switcher dialog to select from recommended free models, local Ollama, or custom model IDs.
+  * **Model (Alt+M):** Open the interactive Model Switcher dialog with category tabs (`Recommended`, `All Cloud Free`, `Local Ollama`), live installed Ollama detection, and zero-latency local caching.
   * **Send (Enter):** Submit current prompt.
   * **Reset (Ctrl+R):** Clear conversation context and reset token telemetry.
   * **Palette (Alt+P):** Open Textual's command palette for theme switching and screenshot capture.
@@ -189,6 +206,30 @@ python app/main.py --local -m "llama3.2:3b" -p "Count the files in this workspac
 
 ---
 
+### 5. Multi-Provider Architecture & Rate Limit Comparison
+
+While **OpenRouter** is configured as the agent's base foundation, the agent can connect to any OpenAI-compatible provider. Each provider uses different rate limiting models and billing systems:
+
+| Provider | Endpoint (`OPENROUTER_BASE_URL` / `--base-url`) | Free Tier Quota & Limits | Telemetry Display |
+| :--- | :--- | :--- | :--- |
+| **OpenRouter** *(Default Base)* | `https://openrouter.ai/api/v1` | **50 free requests / day** per account (credits for paid models). Auto-key rotation (`API_KEYS_OPEN_ROUTER.txt`). | `Requests: X/50 left` or `Credits: $X.XX` |
+| **Google AI Studio (Gemini)** | `https://generativelanguage.googleapis.com/v1beta/openai/` | **15 RPM** (Requests / Minute), **1,500 RPD** (Requests / Day). Auto-key rotation (`API_KEYS_GEMINI.txt`). | `Provider: Gemini Free (1,500 RPD / 15 RPM)` |
+| **Groq** | `https://api.groq.com/openai/v1` | **30 RPM**, **6,000 to 30,000 TPM** on Llama 3.3 models. Auto-key rotation (`API_KEYS_GROQ.txt`). | `Provider: Groq Free (30 RPM / 14.4k RPD)` |
+| **DeepSeek Direct** | `https://api.deepseek.com/v1` | Pay-as-you-go balance / token usage. Auto-key rotation (`API_KEYS_DEEPSEEK.txt`). | `Provider: DeepSeek (Pay-as-you-go)` |
+| **OpenAI Direct** | `https://api.openai.com/v1` | Tiered quotas based on credit balance. | `Provider: OpenAI (Tiered Usage)` |
+| **Local Ollama / LM Studio** | `http://localhost:11434/v1` | **100% Free & Unlimited** (0 rate limits, 0 quotas, 100% offline). | `Requests: Unlimited (Local)` |
+
+#### Running with Custom Providers via CLI:
+```powershell
+# Using Google AI Studio Gemini with your Google API Key:
+python app/main.py --base-url "https://generativelanguage.googleapis.com/v1beta/openai/" -m "gemini-1.5-flash"
+
+# Using Groq with your Groq API Key:
+python app/main.py --base-url "https://api.groq.com/openai/v1" -m "llama-3.3-70b-versatile"
+```
+
+---
+
 ## CLI Reference & Flags
 
 | Flag | Long Flag | Description | Default |
@@ -219,9 +260,9 @@ Tests cover:
 * Path sandboxing & directory traversal prevention (`tests/test_sandbox.py`)
 * Tool operations (`Read`, `Write`, `Edit`, `ListDir`, `Bash`, timeouts, aliases, YAML arguments) (`tests/test_tools.py`)
 * ReAct reasoning loop, step limits, mocked API responses, and resilient local tool call fallback (`tests/test_agent.py`)
-* Multi-key rotation and 429 quota exhaustion recovery (`tests/test_keys.py`)
+* Multi-key rotation, provider-specific key files (`API_KEYS_GEMINI.txt`), and in-flight 429 quota exhaustion recovery (`tests/test_keys.py`)
 * System hardware inspection, RAM/GPU sizing, and multi-drive storage checking (`tests/test_system_info.py`)
-* Responsive TUI layout, model switcher modal, local model switching, and unlimited telemetry verification (`tests/test_tui_layout.py`)
+* Responsive TUI layout, category filter tabs, model switcher modal, local model switching, and unlimited telemetry verification (`tests/test_tui_layout.py`)
 
 ---
 

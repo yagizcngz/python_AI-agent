@@ -176,3 +176,26 @@ def test_agent_fallback_tool_calling_loop(tmp_path: Path):
     assert len(tool_call_events) == 1
     assert tool_call_events[0].data["name"] == "ListDir"
 
+
+def test_custom_provider_validation_and_usage():
+    from ai_agent.config import is_openrouter_url
+    from ai_agent.core.client import fetch_account_usage, validate_model_id
+
+    # 1. URL detection
+    assert is_openrouter_url("https://openrouter.ai/api/v1") is True
+    assert is_openrouter_url("https://generativelanguage.googleapis.com/v1beta/openai/") is False
+    assert is_openrouter_url("https://api.groq.com/openai/v1") is False
+
+    # 2. Model validation allows custom models for external providers
+    valid, res = validate_model_id("gemini-1.5-flash", base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    assert valid is True
+    assert res == "gemini-1.5-flash"
+
+    valid, res = validate_model_id("llama-3.3-70b-versatile", base_url="https://api.groq.com/openai/v1")
+    assert valid is True
+    assert res == "llama-3.3-70b-versatile"
+
+    # 3. Account usage endpoint returns None for custom providers
+    usage = fetch_account_usage(api_key="any-custom-key", base_url="https://api.groq.com/openai/v1")
+    assert usage is None
+

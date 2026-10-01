@@ -93,3 +93,58 @@ def test_agent_auto_rotates_keys_on_quota_error(tmp_path):
     # Key rotated to key 2
     assert km.current_index == 1
     assert any(e.event_type == AgentEventType.THINKING and "Switched to API key" in str(e.data) for e in events)
+
+
+def test_key_manager_gemini_provider(tmp_path):
+    gemini_key_file = tmp_path / "API_KEYS_GEMINI.txt"
+    gemini_key_file.write_text("AIzaSy-gemini-key-1\nAIzaSy-gemini-key-2\n", encoding="utf-8")
+
+    km = KeyManager(key_file=gemini_key_file, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    assert km.total_keys == 2
+    assert km.get_current_key() == "AIzaSy-gemini-key-1"
+
+    success, new_key, msg = km.rotate_key()
+    assert success is True
+    assert new_key == "AIzaSy-gemini-key-2"
+    assert km.get_current_key() == "AIzaSy-gemini-key-2"
+    assert "2 of 2" in msg
+    assert km.source_label == "API_KEYS_GEMINI.txt"
+
+
+def test_agent_auto_rotates_gemini_keys_on_quota_error(tmp_path):
+    gemini_key_file = tmp_path / "API_KEYS_GEMINI.txt"
+    gemini_key_file.write_text("AIzaSy-gemini-key-1\nAIzaSy-gemini-key-2\n", encoding="utf-8")
+    km = KeyManager(key_file=gemini_key_file, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+
+    mock_client1 = MagicMock()
+    mock_client1.chat.completions.create.side_effect = Exception("HTTP 429: Resource has been exhausted (e.g. check quota)")
+
+    mock_client2 = MagicMock()
+    success_resp = MagicMock()
+    choice = MagicMock()
+    choice.message.content = "Gemini response completed."
+    choice.message.tool_calls = None
+    success_resp.choices = [choice]
+    success_resp.usage.prompt_tokens = 40
+    success_resp.usage.completion_tokens = 15
+    mock_client2.chat.completions.create.return_value = success_resp
+
+    agent = Agent(
+        client=mock_client1,
+        model="gemini-1.5-flash",
+        tools=ToolRegistry([]),
+        key_manager=km,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        client_factory=lambda key: mock_client2,
+    )
+
+    events = []
+    agent.event_handler = lambda e: events.append(e)
+
+    res = agent.run("Perform a task with Gemini")
+    assert res == "Gemini response completed."
+    assert km.current_index == 1
+    assert km.get_current_key() == "AIzaSy-gemini-key-2"
+    assert any("Switched to API key 2 of 2" in str(e.data) for e in events)
+
+

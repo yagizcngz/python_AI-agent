@@ -307,7 +307,7 @@ def test_tui_screen_fit_dimensions():
     asyncio.run(_run())
 
 
-def test_model_select_modal_toggle_all_free():
+def test_model_select_modal_category_tabs():
     async def _run():
         app = AgentTUIApp()
         async with app.run_test(size=(100, 24)) as pilot:
@@ -317,23 +317,40 @@ def test_model_select_modal_toggle_all_free():
             assert isinstance(app.screen, ModelSelectModal)
 
             modal = app.screen
-            toggle_btn = modal.query_one("#btn-toggle-all-free", Button)
+            tab_rec = modal.query_one("#filter-rec", Button)
+            tab_cloud = modal.query_one("#filter-cloud", Button)
+            tab_local = modal.query_one("#filter-local", Button)
             options = modal.query_one("#model-options")
 
-            assert toggle_btn.label == "All Free Models"
-            initial_count = options.option_count
-            assert initial_count >= 7
+            # Verify bottom button bar contains ONLY Select and Cancel (no redundant toggle)
+            assert len(modal.query("#btn-toggle-all-free")) == 0
+            confirm_btn = modal.query_one("#btn-confirm-model", Button)
+            cancel_btn = modal.query_one("#btn-cancel-model", Button)
+            assert confirm_btn.label == "Select"
+            assert cancel_btn.label == "Cancel"
 
-            # Toggle to all free models
-            toggle_btn.press()
+            # Initially starts in recommended tab
+            assert "filter-tab-active" in tab_rec.classes
+            initial_count = options.option_count
+            assert initial_count >= 5
+
+            # Switch to All Cloud Free tab
+            tab_cloud.press()
             await pilot.pause()
-            assert toggle_btn.label == "Recommended"
+            assert "filter-tab-active" in tab_cloud.classes
+            assert "filter-tab-active" not in tab_rec.classes
             assert options.option_count >= initial_count
 
-            # Toggle back to recommended
-            toggle_btn.press()
+            # Switch to Local Ollama tab
+            tab_local.press()
             await pilot.pause()
-            assert toggle_btn.label == "All Free Models"
+            assert "filter-tab-active" in tab_local.classes
+            assert "filter-tab-active" not in tab_cloud.classes
+
+            # Switch back to Recommended tab
+            tab_rec.press()
+            await pilot.pause()
+            assert "filter-tab-active" in tab_rec.classes
             assert options.option_count == initial_count
 
             # Close modal
@@ -477,9 +494,37 @@ def test_tui_local_model_unlimited_requests():
             app.switch_to_model({"model": "test-cloud-model", "is_local": False})
             await pilot.pause()
             assert app.is_local is False
-            assert "Unlimited" not in app.daily_limits_text
+    asyncio.run(_run())
+
+
+def test_tui_custom_provider_telemetry():
+    async def _run():
+        # 1. Known provider (Gemini)
+        app = AgentTUIApp(
+            model="gemini-1.5-flash",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key="dummy-gemini-key",
+        )
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            status = app.query_one("#status-bar", Label)
+            assert "Gemini Free" in str(status.content)
+            assert "Gemini Free" in app.daily_limits_text
+
+        # 2. Generic custom provider
+        app_custom = AgentTUIApp(
+            model="custom-model",
+            base_url="https://internal-llm.mycorp.local/v1",
+            api_key="dummy-key",
+        )
+        async with app_custom.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            status_custom = app_custom.query_one("#status-bar", Label)
+            assert "Custom API" in str(status_custom.content)
+            assert "Custom API" in app_custom.daily_limits_text
 
     asyncio.run(_run())
+
 
 
 
