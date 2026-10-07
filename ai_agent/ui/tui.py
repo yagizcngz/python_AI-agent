@@ -6,7 +6,7 @@ Confirm Quit modal, full-screen Chat expand/restore toggling, and Command Palett
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
