@@ -91,8 +91,8 @@ An autonomous, multi-modal interface AI agent built in Python leveraging native 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yagizcngz/python_AI-agent.git
-   cd python_AI-agent
+   git clone https://github.com/yagizcngz/python-ai-agent.git
+   cd python-ai-agent
    ```
 
 2. **Install dependencies:**
